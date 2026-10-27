@@ -31,7 +31,7 @@ class _Drone3dHostState extends State<Drone3dHost> {
     super.initState();
     if (!_registered) {
       _iframe = html.IFrameElement()
-        ..src = 'drone_scene.html'
+        ..src = 'assets/assets/3d/drone_scene.html'
         ..style.border = 'none'
         ..style.width = '100%'
         ..style.height = '100%';

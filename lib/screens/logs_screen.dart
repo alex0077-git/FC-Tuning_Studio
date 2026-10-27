@@ -30,6 +30,14 @@ class _MockLog {
   }
 }
 
+class _ChartSeries {
+  const _ChartSeries(this.label, this.color, this.spots);
+
+  final String label;
+  final Color color;
+  final Queue<FlSpot> spots;
+}
+
 class LogsScreen extends StatefulWidget {
   const LogsScreen({super.key});
 
@@ -276,47 +284,15 @@ class _LogsScreenState extends State<LogsScreen> {
           onChanged: (v) => setState(() => _showGraphs = v),
         ),
         if (_showGraphs) ...[
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Target vs Actual (roll)',
-                style: TextStyle(fontSize: 11, color: AppColors.muted),
-              ),
-            ),
-          ),
-          SizedBox(
-            height: 90,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: _chart([
-                (AppColors.accent, _actual),
-                (Colors.white54, _target),
-              ]),
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'PID terms',
-                style: TextStyle(fontSize: 11, color: AppColors.muted),
-              ),
-            ),
-          ),
-          SizedBox(
-            height: 90,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: _chart([
-                (Colors.lightBlue, _termP),
-                (Colors.orange, _termI),
-                (Colors.greenAccent, _termD),
-              ]),
-            ),
-          ),
+          _chartSection('Target vs Actual (roll)', [
+            _ChartSeries('Actual', AppColors.accent, _actual),
+            _ChartSeries('Target', Colors.white54, _target),
+          ]),
+          _chartSection('PID terms', [
+            _ChartSeries('P', Colors.lightBlue, _termP),
+            _ChartSeries('I', Colors.orange, _termI),
+            _ChartSeries('D', Colors.greenAccent, _termD),
+          ]),
         ],
         const Divider(height: 1, color: AppColors.border),
         Padding(
@@ -470,7 +446,61 @@ class _LogsScreenState extends State<LogsScreen> {
     );
   }
 
-  Widget _chart(List<(Color, Queue<FlSpot>)> series) {
+  Widget _chartSection(String title, List<_ChartSeries> series) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            children: [
+              Text(
+                title,
+                style: const TextStyle(fontSize: 11, color: AppColors.muted),
+              ),
+              const Spacer(),
+              _chartLegend(series),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 90,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: _chart(series),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _chartLegend(List<_ChartSeries> series) {
+    return Wrap(
+      spacing: 10,
+      children: [
+        for (final s in series)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 12,
+                height: 3,
+                decoration: BoxDecoration(
+                  color: s.color,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                s.label,
+                style: const TextStyle(fontSize: 11, color: AppColors.text),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _chart(List<_ChartSeries> series) {
     return LineChart(
       LineChartData(
         minY: null,
@@ -479,11 +509,11 @@ class _LogsScreenState extends State<LogsScreen> {
         titlesData: const FlTitlesData(show: false),
         borderData: FlBorderData(show: false),
         lineBarsData: [
-          for (final (color, q) in series)
+          for (final s in series)
             LineChartBarData(
-              spots: q.isEmpty ? [const FlSpot(0, 0)] : q.toList(),
+              spots: s.spots.isEmpty ? [const FlSpot(0, 0)] : s.spots.toList(),
               isCurved: true,
-              color: color,
+              color: s.color,
               barWidth: 2,
               dotData: const FlDotData(show: false),
             ),

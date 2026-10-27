@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 enum _Tab { outer, inner, altHold }
 enum _Axis { roll, pitch, yaw }
-
 
 class _Pid {
   _Pid({this.p = 0, this.i = 0, this.d = 0});
@@ -49,7 +49,6 @@ class _Gains {
 class TuningScreen extends StatefulWidget {
   const TuningScreen({super.key, this.armed = false});
 
-  /// When true, Write and Save stay disabled (SRS safety rule).
   final bool armed;
 
   @override
@@ -59,8 +58,6 @@ class TuningScreen extends StatefulWidget {
 class _TuningScreenState extends State<TuningScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
-
-  // Mock: what is on the FC vs what the user is editing.
   late _Gains _fc;
   late _Gains _edited;
 
@@ -81,17 +78,13 @@ class _TuningScreenState extends State<TuningScreen>
     super.dispose();
   }
 
-  
-
   Future<void> _write() async {
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
-
     setState(() {
       _fc = _edited.clone();
       _edited = _fc.clone();
     });
-
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Write verified — FC values updated')),
     );
@@ -101,6 +94,7 @@ class _TuningScreenState extends State<TuningScreen>
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
         title: const Text('Save to FC?'),
         content: const Text(
           'Store current gains in non-volatile memory on the flight controller.',
@@ -117,13 +111,10 @@ class _TuningScreenState extends State<TuningScreen>
         ],
       ),
     );
-
     if (ok != true) return;
-
     await _write();
     await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
-
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Saved to FC non-volatile memory')),
     );
@@ -136,66 +127,142 @@ class _TuningScreenState extends State<TuningScreen>
     );
   }
 
+  bool get _dirty {
+    // Cheap “unsaved edits” hint for the footer.
+    return _edited.outerRollP != _fc.outerRollP ||
+        _edited.outerPitchP != _fc.outerPitchP ||
+        _edited.outerYawP != _fc.outerYawP ||
+        _edited.innerRoll.p != _fc.innerRoll.p ||
+        _edited.innerRoll.i != _fc.innerRoll.i ||
+        _edited.innerRoll.d != _fc.innerRoll.d ||
+        _edited.innerPitch.p != _fc.innerPitch.p ||
+        _edited.innerPitch.i != _fc.innerPitch.i ||
+        _edited.innerPitch.d != _fc.innerPitch.d ||
+        _edited.innerYaw.p != _fc.innerYaw.p ||
+        _edited.innerYaw.i != _fc.innerYaw.i ||
+        _edited.innerYaw.d != _fc.innerYaw.d ||
+        _edited.altHold.p != _fc.altHold.p ||
+        _edited.altHold.i != _fc.altHold.i ||
+        _edited.altHold.d != _fc.altHold.d;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        TabBar(
-          controller: _tabs,
-          onTap: (_) => setState(() {}),
-          tabs: const [
-            Tab(text: 'Outer loop'),
-            Tab(text: 'Inner loop'),
-            Tab(text: 'Alt Hold'),
-          ],
+        Material(
+          color: AppColors.surface,
+          child: TabBar(
+            controller: _tabs,
+            onTap: (_) => setState(() {}),
+            labelColor: AppColors.accent,
+            unselectedLabelColor: AppColors.muted,
+            indicatorColor: AppColors.accent,
+            indicatorWeight: 2.5,
+            tabs: const [
+              Tab(text: 'Outer loop'),
+              Tab(text: 'Inner loop'),
+              Tab(text: 'Alt Hold'),
+            ],
+          ),
         ),
+        if (widget.armed)
+          Container(
+            width: double.infinity,
+            color: AppColors.danger.withOpacity(0.15),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: const Text(
+              'Armed — Write / Save disabled',
+              style: TextStyle(color: AppColors.danger, fontSize: 12),
+            ),
+          ),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
             children: [
-              if (_tabs.index != _Tab.altHold.index) _axisChips(),
+              if (_tabs.index != _Tab.altHold.index) ...[
+                _axisChips(),
                 const SizedBox(height: 12),
-                ..._buildSliders(),
-              if (_tabs.index == _Tab.inner.index)
+              ],
+              Container(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: Column(children: _buildSliders()),
+              ),
+              if (_tabs.index == _Tab.inner.index) ...[
+                const SizedBox(height: 8),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Link roll + pitch'),
+                  activeColor: AppColors.accent,
+                  title: const Text(
+                    'Link roll + pitch',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  subtitle: const Text(
+                    'Editing one axis copies values to the other',
+                    style: TextStyle(fontSize: 12, color: AppColors.muted),
+                  ),
                   value: _linkRollPitch,
                   onChanged: (v) =>
                       setState(() => _linkRollPitch = v ?? true),
                 ),
+              ],
             ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          child: Row(
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          decoration: const BoxDecoration(
+            color: AppColors.surface,
+            border: Border(top: BorderSide(color: AppColors.border)),
+          ),
+          child: Column(
             children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: widget.armed ? null : _write,
-                  child: const Text('Write'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2EAE5B),
+              if (_dirty)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Unsaved edits — Write to push to FC',
+                      style: TextStyle(fontSize: 11, color: AppColors.warning),
+                    ),
                   ),
-                  onPressed: widget.armed ? null : _saveToFc,
-                  child: const Text('Save to FC'),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2E343C),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: widget.armed ? null : _write,
+                      child: const Text('Write'),
+                    ),
                   ),
-                  onPressed: _revert,
-                  child: const Text('Revert'),
-                ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.success,
+                      ),
+                      onPressed: widget.armed ? null : _saveToFc,
+                      child: const Text('Save to FC'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.surface2,
+                        foregroundColor: AppColors.text,
+                      ),
+                      onPressed: _revert,
+                      child: const Text('Revert'),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -206,10 +273,18 @@ class _TuningScreenState extends State<TuningScreen>
 
   Widget _axisChips() {
     Widget chip(_Axis axis, String label) {
+      final on = _axis == axis;
       return ChoiceChip(
         label: Text(label),
-        selected: _axis == axis,
-        selectedColor: const Color(0xFF2F7BFF),
+        selected: on,
+        selectedColor: AppColors.accent,
+        backgroundColor: AppColors.surface2,
+        labelStyle: TextStyle(
+          color: on ? Colors.white : AppColors.muted,
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+        ),
+        side: BorderSide(color: on ? AppColors.accent : AppColors.border),
         onSelected: (_) => setState(() => _axis = axis),
       );
     }
@@ -224,14 +299,14 @@ class _TuningScreenState extends State<TuningScreen>
     );
   }
 
-  
   List<Widget> _buildSliders() {
     final tab = _Tab.values[_tabs.index];
 
     if (tab == _Tab.outer) {
+      final name = _axis.name[0].toUpperCase() + _axis.name.substring(1);
       return [
         _slider(
-          label: '${_axis.name[0].toUpperCase()}${_axis.name.substring(1)} P',
+          label: '$name P',
           value: _outerEdited(),
           fcValue: _outerFc(),
           min: 0,
@@ -372,26 +447,58 @@ class _TuningScreenState extends State<TuningScreen>
     required double max,
     required ValueChanged<double> onChanged,
   }) {
+    final drifted = (value - fcValue).abs() > 0.0005;
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         children: [
-          SizedBox(width: 72, child: Text(label)),
+          SizedBox(
+            width: 64,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.text,
+              ),
+            ),
+          ),
           Expanded(
-            child: Slider(
-              value: value.clamp(min, max),
-              min: min,
-              max: max,
-              onChanged: onChanged,
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: AppColors.accent,
+                inactiveTrackColor: AppColors.border,
+                thumbColor: AppColors.accent,
+                overlayColor: AppColors.accent.withOpacity(0.15),
+                trackHeight: 3,
+              ),
+              child: Slider(
+                value: value.clamp(min, max),
+                min: min,
+                max: max,
+                onChanged: onChanged,
+              ),
             ),
           ),
           SizedBox(
-            width: 88,
-            child: Text(
-              '${value.toStringAsFixed(2)}\nFC: ${fcValue.toStringAsFixed(2)}',
-              textAlign: TextAlign.right,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF9AA3AD)),
+            width: 78,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  value.toStringAsFixed(2),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: drifted ? AppColors.warning : AppColors.text,
+                  ),
+                ),
+                Text(
+                  'FC ${fcValue.toStringAsFixed(2)}',
+                  style: const TextStyle(fontSize: 11, color: AppColors.muted),
+                ),
+              ],
             ),
           ),
         ],

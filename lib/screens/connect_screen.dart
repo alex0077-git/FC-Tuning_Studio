@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 enum LinkType { wifi, bluetooth }
 
@@ -56,10 +57,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
     }
 
     setState(() => _busy = true);
-
-    // Fake waiting for MAVLink heartbeat (mock only).
     await Future<void>.delayed(const Duration(milliseconds: 700));
-
     if (!mounted) return;
 
     const firmware = 'v1.0';
@@ -85,114 +83,152 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final locked = widget.connected || _busy;
+
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
         const Text(
           'Connect to Flight Controller',
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 16),
-        SegmentedButton<LinkType>(
-          segments: const [
-            ButtonSegment(
-              value: LinkType.wifi,
-              label: Text('Wi-Fi'),
-              icon: Icon(Icons.wifi),
-            ),
-            ButtonSegment(
-              value: LinkType.bluetooth,
-              label: Text('Bluetooth'),
-              icon: Icon(Icons.bluetooth),
-            ),
-          ],
-          selected: {_linkType},
-          onSelectionChanged: widget.connected || _busy
-              ? null
-              : (selected) {
-                  setState(() => _linkType = selected.first);
-                },
-        ),
-        const SizedBox(height: 16),
-        if (_linkType == LinkType.wifi) ...[
-          TextField(
-            controller: _addressController,
-            enabled: !widget.connected && !_busy,
-            decoration: const InputDecoration(
-              labelText: 'Address',
-              filled: true,
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _portController,
-            enabled: !widget.connected && !_busy,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'Port',
-              filled: true,
-            ),
-          ),
-        ] else
-          DropdownButtonFormField<String>(
-            value: _btDevice,
-            decoration: const InputDecoration(
-              labelText: 'Device',
-              filled: true,
-            ),
-            items: const [
-              DropdownMenuItem(value: 'Skydroid T12', child: Text('Skydroid T12')),
-              DropdownMenuItem(value: 'Skydroid G20', child: Text('Skydroid G20')),
-            ],
-            onChanged: widget.connected || _busy
-                ? null
-                : (value) {
-                    if (value != null) setState(() => _btDevice = value);
-                  },
-          ),
-        const SizedBox(height: 20),
-        ElevatedButton(
-          onPressed: _busy ? null : _toggleConnect,
-          style: ElevatedButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
-          ),
-          child: Text(
-            _busy
-                ? 'Connecting…'
-                : (widget.connected ? 'Disconnect' : 'Connect'),
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w600,
+            color: AppColors.text,
           ),
         ),
-        const SizedBox(height: 10),
-        OutlinedButton.icon(
-          onPressed: widget.connected || _busy
-              ? null
-              : () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        _linkType == LinkType.wifi
-                            ? 'Ports refreshed (mock)'
-                            : 'Devices refreshed (mock)',
-                      ),
+        const SizedBox(height: 6),
+        const Text(
+          'Link through Skydroid G20 / T12 (Wi‑Fi or Bluetooth).',
+          style: TextStyle(fontSize: 13, color: AppColors.muted),
+        ),
+        const SizedBox(height: 18),
+        _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SegmentedButton<LinkType>(
+                segments: const [
+                  ButtonSegment(
+                    value: LinkType.wifi,
+                    label: Text('Wi‑Fi'),
+                    icon: Icon(Icons.wifi, size: 18),
+                  ),
+                  ButtonSegment(
+                    value: LinkType.bluetooth,
+                    label: Text('Bluetooth'),
+                    icon: Icon(Icons.bluetooth, size: 18),
+                  ),
+                ],
+                selected: {_linkType},
+                onSelectionChanged: locked
+                    ? null
+                    : (selected) {
+                        setState(() => _linkType = selected.first);
+                      },
+              ),
+              const SizedBox(height: 14),
+              if (_linkType == LinkType.wifi) ...[
+                TextField(
+                  controller: _addressController,
+                  enabled: !locked,
+                  decoration: const InputDecoration(
+                    labelText: 'Address',
+                    prefixIcon: Icon(Icons.lan_outlined, size: 20),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _portController,
+                  enabled: !locked,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Port',
+                    prefixIcon: Icon(Icons.numbers, size: 20),
+                  ),
+                ),
+              ] else
+                DropdownButtonFormField<String>(
+                  value: _btDevice,
+                  decoration: const InputDecoration(
+                    labelText: 'Device',
+                    prefixIcon: Icon(Icons.phone_android, size: 20),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'Skydroid T12',
+                      child: Text('Skydroid T12'),
                     ),
-                  );
-                },
-          icon: const Icon(Icons.refresh),
-          label: Text(
-            _linkType == LinkType.wifi ? 'Refresh ports' : 'Refresh devices',
+                    DropdownMenuItem(
+                      value: 'Skydroid G20',
+                      child: Text('Skydroid G20'),
+                    ),
+                  ],
+                  onChanged: locked
+                      ? null
+                      : (value) {
+                          if (value != null) {
+                            setState(() => _btDevice = value);
+                          }
+                        },
+                ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _busy ? null : _toggleConnect,
+                style: widget.connected
+                    ? ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.danger,
+                      )
+                    : null,
+                child: _busy
+                    ? const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.4,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Text(widget.connected ? 'Disconnect' : 'Connect'),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: locked
+                    ? null
+                    : () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              _linkType == LinkType.wifi
+                                  ? 'Ports refreshed (mock)'
+                                  : 'Devices refreshed (mock)',
+                            ),
+                          ),
+                        );
+                      },
+                icon: const Icon(Icons.refresh, size: 18),
+                label: Text(
+                  _linkType == LinkType.wifi
+                      ? 'Refresh ports'
+                      : 'Refresh devices',
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 24),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF252A30),
-            borderRadius: BorderRadius.circular(12),
-          ),
+        const SizedBox(height: 14),
+        _Card(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Text(
+                'Device info',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.text,
+                ),
+              ),
+              const SizedBox(height: 10),
               _InfoRow(label: 'Firmware', value: _firmware),
               _InfoRow(label: 'Board ID', value: _boardId),
               _InfoRow(label: 'Parameters', value: _parameters),
@@ -201,6 +237,25 @@ class _ConnectScreenState extends State<ConnectScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _Card extends StatelessWidget {
+  const _Card({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: child,
     );
   }
 }
@@ -214,17 +269,26 @@ class _InfoRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         children: [
           SizedBox(
             width: 110,
             child: Text(
               label,
-              style: const TextStyle(color: Color(0xFF9AA3AD)),
+              style: const TextStyle(color: AppColors.muted, fontSize: 13),
             ),
           ),
-          Expanded(child: Text(value)),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontWeight: FontWeight.w500,
+                fontSize: 13,
+              ),
+            ),
+          ),
         ],
       ),
     );

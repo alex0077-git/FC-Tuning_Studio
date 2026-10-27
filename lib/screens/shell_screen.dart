@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'connect_screen.dart';
-import 'tuning_screen.dart';
 import 'logs_screen.dart';
+import 'tuning_screen.dart';
 import 'view3d_screen.dart';
 
 class ShellScreen extends StatefulWidget {
@@ -20,6 +21,8 @@ class _ShellScreenState extends State<ShellScreen> {
   String _firmware = '—';
   String _preset = 'Default';
 
+  void _openConnect() => setState(() => _pageIndex = 0);
+
   @override
   Widget build(BuildContext context) {
     final pages = [
@@ -35,7 +38,7 @@ class _ShellScreenState extends State<ShellScreen> {
             _connected = true;
             _armed = false;
             _firmware = firmware;
-            _pageIndex = 1; // jump to Tuning after connect
+            _pageIndex = 1;
           });
         },
         onDisconnected: () {
@@ -49,14 +52,17 @@ class _ShellScreenState extends State<ShellScreen> {
       ),
       _LockedPage(
         locked: !_connected,
+        onConnectTap: _openConnect,
         child: TuningScreen(armed: _armed),
       ),
       _LockedPage(
         locked: !_connected,
+        onConnectTap: _openConnect,
         child: const LogsScreen(),
       ),
       _LockedPage(
         locked: !_connected,
+        onConnectTap: _openConnect,
         child: const View3dScreen(),
       ),
     ];
@@ -70,48 +76,36 @@ class _ShellScreenState extends State<ShellScreen> {
               armed: _armed,
               firmware: _firmware,
               preset: _preset,
+              onMenuTap: _openConnect,
             ),
             Expanded(child: pages[_pageIndex]),
           ],
         ),
       ),
       bottomNavigationBar: NavigationBar(
+        height: 64,
         selectedIndex: _pageIndex == 0 ? 0 : _pageIndex - 1,
         onDestinationSelected: (i) {
           setState(() => _pageIndex = i + 1);
         },
-        destinations: [
+        destinations: const [
           NavigationDestination(
-            icon: Icon(
-              Icons.tune,
-              color: _connected ? null : const Color(0xFF9AA3AD),
-            ),
+            icon: Icon(Icons.tune_outlined),
+            selectedIcon: Icon(Icons.tune),
             label: 'Tuning',
           ),
           NavigationDestination(
-            icon: Icon(
-              Icons.bar_chart,
-              color: _connected ? null : const Color(0xFF9AA3AD),
-            ),
+            icon: Icon(Icons.bar_chart_outlined),
+            selectedIcon: Icon(Icons.bar_chart),
             label: 'Logs',
           ),
           NavigationDestination(
-            icon: Icon(
-              Icons.view_in_ar,
-              color: _connected ? null : const Color(0xFF9AA3AD),
-            ),
+            icon: Icon(Icons.view_in_ar_outlined),
+            selectedIcon: Icon(Icons.view_in_ar),
             label: '3D View',
           ),
         ],
       ),
-      floatingActionButton: _pageIndex != 0
-          ? FloatingActionButton.extended(
-              onPressed: () => setState(() => _pageIndex = 0),
-              icon: const Icon(Icons.link),
-              label: const Text('Connect'),
-            )
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
     );
   }
 }
@@ -122,91 +116,155 @@ class _StatusBar extends StatelessWidget {
     required this.armed,
     required this.firmware,
     required this.preset,
+    required this.onMenuTap,
   });
 
   final bool connected;
   final bool armed;
   final String firmware;
   final String preset;
+  final VoidCallback onMenuTap;
 
   @override
   Widget build(BuildContext context) {
-    final dotColor =
-        connected ? const Color(0xFF2EAE5B) : const Color(0xFFE24B4B);
+    final dotColor = connected ? AppColors.success : AppColors.danger;
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      color: const Color(0xFF252A30),
-      child: Row(
-        children: [
-          const Icon(Icons.menu, size: 22),
-          const SizedBox(width: 10),
-          Container(
-            width: 9,
-            height: 9,
-            decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Status: ${connected ? 'Connected' : 'Disconnected'}  |  '
-              'Armed: ${armed ? 'Yes' : 'No'}  |  '
-              'FW: $firmware  |  '
-              'Preset: $preset',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF9AA3AD)),
-              overflow: TextOverflow.ellipsis,
+    return Material(
+      color: AppColors.surface,
+      child: InkWell(
+        onTap: onMenuTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          decoration: const BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: AppColors.border, width: 1),
             ),
           ),
-        ],
+          child: Row(
+            children: [
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: onMenuTap,
+                icon: const Icon(Icons.menu, size: 22, color: AppColors.text),
+                tooltip: 'Connection',
+              ),
+              const SizedBox(width: 4),
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: dotColor,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: dotColor.withOpacity(0.55),
+                      blurRadius: 6,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    style: const TextStyle(fontSize: 12, color: AppColors.muted),
+                    children: [
+                      const TextSpan(text: 'Status: '),
+                      TextSpan(
+                        text: connected ? 'Connected' : 'Disconnected',
+                        style: TextStyle(
+                          color: connected ? AppColors.success : AppColors.danger,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      TextSpan(
+                        text: '  |  Armed: ${armed ? 'Yes' : 'No'}'
+                            '  |  FW: $firmware'
+                            '  |  Preset: $preset',
+                      ),
+                    ],
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
 class _LockedPage extends StatelessWidget {
-  const _LockedPage({required this.locked, required this.child});
+  const _LockedPage({
+    required this.locked,
+    required this.child,
+    required this.onConnectTap,
+  });
 
   final bool locked;
   final Widget child;
+  final VoidCallback onConnectTap;
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
         Opacity(
-          opacity: locked ? 0.35 : 1,
+          opacity: locked ? 0.28 : 1,
           child: IgnorePointer(ignoring: locked, child: child),
         ),
         if (locked)
-          const Positioned.fill(
+          Positioned.fill(
             child: ColoredBox(
-              color: Color(0x66000000),
+              color: const Color(0x99000000),
               child: Center(
-                child: Text(
-                  'Connect to FC to unlock',
-                  style: TextStyle(color: Color(0xFF9AA3AD), fontSize: 14),
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 28),
+                  padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.link_off, color: AppColors.muted, size: 28),
+                      const SizedBox(height: 10),
+                      const Text(
+                        'FC not connected',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.text,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Connect to the flight controller to unlock this page.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 13, color: AppColors.muted),
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: onConnectTap,
+                          icon: const Icon(Icons.link, size: 18),
+                          label: const Text('Go to Connect'),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
       ],
-    );
-  }
-}
-
-class _PlaceholderPage extends StatelessWidget {
-  const _PlaceholderPage({required this.title});
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Text(
-        title,
-        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
-      ),
     );
   }
 }

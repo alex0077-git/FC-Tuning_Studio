@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 class _MockLog {
   _MockLog({
@@ -51,12 +52,10 @@ class _LogsScreenState extends State<LogsScreen> {
   double _battery = 15.2;
   int _gpsSats = 12;
 
-  // Live feed
   final List<String> _lines = <String>[];
   static const int _maxLines = 300;
   bool _paused = false;
 
-  // Graphs (optional)
   bool _showGraphs = false;
   double _chartX = 0;
   final Queue<FlSpot> _actual = Queue<FlSpot>();
@@ -66,7 +65,6 @@ class _LogsScreenState extends State<LogsScreen> {
   final Queue<FlSpot> _termD = Queue<FlSpot>();
   static const int _maxPoints = 50;
 
-  // Mock onboard logs
   late List<_MockLog> _logs;
   int? _downloadingIndex;
   double _downloadProgress = 0;
@@ -93,10 +91,6 @@ class _LogsScreenState extends State<LogsScreen> {
     ];
 
     _timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
-      if (_paused && !_showGraphs) {
-        // Still allow charts to move if graphs on? Keep simple: pause freezes feed only.
-      }
-
       _t += 0.08;
       _tick++;
 
@@ -126,7 +120,6 @@ class _LogsScreenState extends State<LogsScreen> {
         _battery = battery;
         _gpsSats = sats;
 
-        // Chart buffers always update so opening graphs isn't empty.
         _chartX += 1;
         _push(_actual, roll);
         _push(_target, targetRoll);
@@ -273,8 +266,12 @@ class _LogsScreenState extends State<LogsScreen> {
         ),
         SwitchListTile(
           dense: true,
+          activeColor: AppColors.accent,
           contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-          title: const Text('Live graphs', style: TextStyle(fontSize: 13)),
+          title: const Text(
+            'Live graphs',
+            style: TextStyle(fontSize: 13, color: AppColors.text),
+          ),
           value: _showGraphs,
           onChanged: (v) => setState(() => _showGraphs = v),
         ),
@@ -285,49 +282,68 @@ class _LogsScreenState extends State<LogsScreen> {
               alignment: Alignment.centerLeft,
               child: Text(
                 'Target vs Actual (roll)',
-                style: TextStyle(fontSize: 11, color: Color(0xFF9AA3AD)),
+                style: TextStyle(fontSize: 11, color: AppColors.muted),
               ),
             ),
           ),
-          SizedBox(height: 90, child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: _chart([
-              (const Color(0xFF2F7BFF), _actual),
-              (Colors.white54, _target),
-            ]),
-          )),
+          SizedBox(
+            height: 90,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: _chart([
+                (AppColors.accent, _actual),
+                (Colors.white54, _target),
+              ]),
+            ),
+          ),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 12),
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
                 'PID terms',
-                style: TextStyle(fontSize: 11, color: Color(0xFF9AA3AD)),
+                style: TextStyle(fontSize: 11, color: AppColors.muted),
               ),
             ),
           ),
-          SizedBox(height: 90, child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: _chart([
-              (Colors.lightBlue, _termP),
-              (Colors.orange, _termI),
-              (Colors.greenAccent, _termD),
-            ]),
-          )),
+          SizedBox(
+            height: 90,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: _chart([
+                (Colors.lightBlue, _termP),
+                (Colors.orange, _termI),
+                (Colors.greenAccent, _termD),
+              ]),
+            ),
+          ),
         ],
-        const Divider(height: 1),
+        const Divider(height: 1, color: AppColors.border),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 8, 4),
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 6),
           child: Row(
             children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: _paused ? AppColors.warning : AppColors.success,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
               const Text(
                 'Live feed',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.text,
+                ),
               ),
               const SizedBox(width: 8),
               Text(
                 '${_lines.length} lines',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF9AA3AD)),
+                style: const TextStyle(fontSize: 11, color: AppColors.muted),
               ),
               const Spacer(),
               TextButton(
@@ -349,8 +365,8 @@ class _LogsScreenState extends State<LogsScreen> {
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: const Color(0xFF0E1114),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFF2E343C)),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppColors.border),
             ),
             child: ListView.builder(
               controller: _scrollController,
@@ -370,19 +386,23 @@ class _LogsScreenState extends State<LogsScreen> {
             ),
           ),
         ),
-        const Divider(height: 1),
+        const Divider(height: 1, color: AppColors.border),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
           child: Row(
             children: [
               const Text(
                 'Onboard logs',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.text,
+                ),
               ),
               const Spacer(),
               Text(
                 '${_logs.length} files',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF9AA3AD)),
+                style: const TextStyle(fontSize: 11, color: AppColors.muted),
               ),
             ],
           ),
@@ -390,7 +410,11 @@ class _LogsScreenState extends State<LogsScreen> {
         if (_downloadingIndex != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: LinearProgressIndicator(value: _downloadProgress),
+            child: LinearProgressIndicator(
+              value: _downloadProgress,
+              color: AppColors.accent,
+              backgroundColor: AppColors.surface2,
+            ),
           ),
         SizedBox(
           height: 140,
@@ -401,14 +425,25 @@ class _LogsScreenState extends State<LogsScreen> {
               final log = _logs[i];
               final busy = _downloadingIndex == log.index;
               return Card(
-                color: const Color(0xFF252A30),
+                color: AppColors.surface,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  side: const BorderSide(color: AppColors.border),
+                ),
                 child: ListTile(
                   dense: true,
-                  title: Text('Log #${log.index}', style: const TextStyle(fontSize: 13)),
+                  title: Text(
+                    'Log #${log.index}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.text,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   subtitle: Text(
                     '${log.startedAt.toLocal().toString().substring(0, 19)} · ${log.sizeLabel}'
                     '${log.downloaded ? ' · saved' : ''}',
-                    style: const TextStyle(fontSize: 11),
+                    style: const TextStyle(fontSize: 11, color: AppColors.muted),
                   ),
                   trailing: Wrap(
                     spacing: 4,
@@ -420,7 +455,8 @@ class _LogsScreenState extends State<LogsScreen> {
                         child: Text(busy ? '…' : 'Download'),
                       ),
                       TextButton(
-                        onPressed: log.downloaded ? () => _exportCsv(log) : null,
+                        onPressed:
+                            log.downloaded ? () => _exportCsv(log) : null,
                         child: const Text('CSV'),
                       ),
                     ],
@@ -467,24 +503,25 @@ class _LogsScreenState extends State<LogsScreen> {
 
   Widget _mini(String label, String value) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFF252A30),
-        borderRadius: BorderRadius.circular(6),
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.border),
       ),
       child: Text.rich(
         TextSpan(
           children: [
             TextSpan(
               text: '$label ',
-              style: const TextStyle(fontSize: 11, color: Color(0xFF9AA3AD)),
+              style: const TextStyle(fontSize: 11, color: AppColors.muted),
             ),
             TextSpan(
               text: value,
               style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.text,
               ),
             ),
           ],

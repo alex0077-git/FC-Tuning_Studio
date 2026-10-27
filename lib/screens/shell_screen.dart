@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'connect_screen.dart';
+import 'tuning_screen.dart';
+import 'logs_screen.dart';
 
 class ShellScreen extends StatefulWidget {
   const ShellScreen({super.key});
@@ -12,39 +14,93 @@ class _ShellScreenState extends State<ShellScreen> {
   // 0 = Connect, 1 = Tuning, 2 = Logs, 3 = 3D View
   int _pageIndex = 0;
 
-  static const _pages = [
-  ConnectScreen(),
-  _PlaceholderPage(title: 'Gain Tuning'),
-  _PlaceholderPage(title: 'Logs'),
-  _PlaceholderPage(title: '3D View'),
-  ];
+  bool _connected = false;
+  bool _armed = false;
+  String _firmware = '—';
+  String _preset = 'Default';
 
   @override
   Widget build(BuildContext context) {
+    final pages = [
+      ConnectScreen(
+        connected: _connected,
+        onConnected: ({
+          required firmware,
+          required boardId,
+          required parameterCount,
+          required linkQualityPercent,
+        }) {
+          setState(() {
+            _connected = true;
+            _armed = false;
+            _firmware = firmware;
+            _pageIndex = 1; // jump to Tuning after connect
+          });
+        },
+        onDisconnected: () {
+          setState(() {
+            _connected = false;
+            _armed = false;
+            _firmware = '—';
+            _pageIndex = 0;
+          });
+        },
+      ),
+      _LockedPage(
+        locked: !_connected,
+        child: TuningScreen(armed: _armed),
+      ),
+      _LockedPage(
+        locked: !_connected,
+        child: const LogsScreen(),
+      ),
+      _LockedPage(
+        locked: !_connected,
+        child: const _PlaceholderPage(title: '3D View'),
+      ),
+    ];
+
     return Scaffold(
       body: SafeArea(
         child: Column(
           children: [
-            const _StatusBar(
-              connected: false,
-              armed: false,
-              firmware: '—',
-              preset: 'Default',
+            _StatusBar(
+              connected: _connected,
+              armed: _armed,
+              firmware: _firmware,
+              preset: _preset,
             ),
-            Expanded(child: _pages[_pageIndex]),
+            Expanded(child: pages[_pageIndex]),
           ],
         ),
       ),
       bottomNavigationBar: NavigationBar(
-        // Bottom bar has 3 tabs; they map to pages 1, 2, 3.
         selectedIndex: _pageIndex == 0 ? 0 : _pageIndex - 1,
         onDestinationSelected: (i) {
           setState(() => _pageIndex = i + 1);
         },
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.tune), label: 'Tuning'),
-          NavigationDestination(icon: Icon(Icons.bar_chart), label: 'Logs'),
-          NavigationDestination(icon: Icon(Icons.view_in_ar), label: '3D View'),
+        destinations: [
+          NavigationDestination(
+            icon: Icon(
+              Icons.tune,
+              color: _connected ? null : const Color(0xFF9AA3AD),
+            ),
+            label: 'Tuning',
+          ),
+          NavigationDestination(
+            icon: Icon(
+              Icons.bar_chart,
+              color: _connected ? null : const Color(0xFF9AA3AD),
+            ),
+            label: 'Logs',
+          ),
+          NavigationDestination(
+            icon: Icon(
+              Icons.view_in_ar,
+              color: _connected ? null : const Color(0xFF9AA3AD),
+            ),
+            label: '3D View',
+          ),
         ],
       ),
       floatingActionButton: _pageIndex != 0
@@ -74,7 +130,8 @@ class _StatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dotColor = connected ? const Color(0xFF2EAE5B) : const Color(0xFFE24B4B);
+    final dotColor =
+        connected ? const Color(0xFF2EAE5B) : const Color(0xFFE24B4B);
 
     return Container(
       width: double.infinity,
@@ -102,6 +159,37 @@ class _StatusBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _LockedPage extends StatelessWidget {
+  const _LockedPage({required this.locked, required this.child});
+
+  final bool locked;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Opacity(
+          opacity: locked ? 0.35 : 1,
+          child: IgnorePointer(ignoring: locked, child: child),
+        ),
+        if (locked)
+          const Positioned.fill(
+            child: ColoredBox(
+              color: Color(0x66000000),
+              child: Center(
+                child: Text(
+                  'Connect to FC to unlock',
+                  style: TextStyle(color: Color(0xFF9AA3AD), fontSize: 14),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

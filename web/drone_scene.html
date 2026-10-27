@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FC Quad-X 3D</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #1a1d21; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+<script>
+(function () {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1d21);
+  scene.fog = new THREE.Fog(0x1a1d21, 14, 42);
+
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+  camera.position.set(4.0, 2.8, 5.0);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.appendChild(renderer.domElement);
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.target.set(0, 0.25, 0);
+  controls.minDistance = 2.5;
+  controls.maxDistance = 14;
+
+  scene.add(new THREE.HemisphereLight(0xdde4ee, 0x2a3038, 0.7));
+  const key = new THREE.DirectionalLight(0xffffff, 1.05);
+  key.position.set(6, 10, 5);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.camera.near = 1;
+  key.shadow.camera.far = 30;
+  key.shadow.camera.left = -8;
+  key.shadow.camera.right = 8;
+  key.shadow.camera.top = 8;
+  key.shadow.camera.bottom = -8;
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0x88a0c8, 0.4);
+  rim.position.set(-5, 4, -3);
+  scene.add(rim);
+
+  const grid = new THREE.GridHelper(16, 32, 0x6a7580, 0x3a424c);
+  scene.add(grid);
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(16, 16),
+    new THREE.ShadowMaterial({ opacity: 0.4 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  const carbon = new THREE.MeshStandardMaterial({
+    color: 0x2c3036, metalness: 0.55, roughness: 0.38
+  });
+  const carbonLight = new THREE.MeshStandardMaterial({
+    color: 0x4a515a, metalness: 0.45, roughness: 0.42
+  });
+  const alum = new THREE.MeshStandardMaterial({
+    color: 0x9aa3ad, metalness: 0.7, roughness: 0.28
+  });
+  const motorMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1d21, metalness: 0.6, roughness: 0.35
+  });
+  // ONE prop colour for all motors (diagonals match)
+  const propMat = new THREE.MeshStandardMaterial({
+    color: 0x1e2228, metalness: 0.15, roughness: 0.65
+  });
+  const accent = new THREE.MeshStandardMaterial({
+    color: 0x2f7bff, metalness: 0.5, roughness: 0.3
+  });
+  const tipFront = new THREE.MeshStandardMaterial({
+    color: 0xcfd5dc, metalness: 0.1, roughness: 0.55
+  });
+  const tipRear = new THREE.MeshStandardMaterial({
+    color: 0xe24b4b, metalness: 0.3, roughness: 0.4
+  });
+
+  const drone = new THREE.Group();
+  scene.add(drone);
+
+  function mesh(geo, mat, parent) {
+    const m = new THREE.Mesh(geo, mat);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    (parent || drone).add(m);
+    return m;
+  }
+
+  // ---- center stack ----
+  const plate = mesh(new THREE.BoxGeometry(0.95, 0.04, 0.95), carbon);
+  plate.position.set(0, 0.28, 0);
+  const plateBot = mesh(new THREE.BoxGeometry(0.95, 0.04, 0.95), carbon);
+  plateBot.position.set(0, 0.12, 0);
+
+  // mid plate for a thicker stack look
+  const plateMid = mesh(new THREE.BoxGeometry(0.88, 0.03, 0.88), carbonLight);
+  plateMid.position.set(0, 0.20, 0);
+
+  [
+    [-0.35, 0.2, -0.35], [0.35, 0.2, -0.35],
+    [-0.35, 0.2,  0.35], [0.35, 0.2,  0.35],
+  ].forEach(p => {
+    const s = mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.14, 10), alum);
+    s.position.set(p[0], p[1], p[2]);
+  });
+
+  const stack = mesh(new THREE.BoxGeometry(0.42, 0.1, 0.42), carbonLight);
+  stack.position.set(0, 0.34, 0);
+  const fc = mesh(new THREE.BoxGeometry(0.28, 0.03, 0.28), accent);
+  fc.position.set(0, 0.40, 0);
+
+  // small top receiver / barometer bump
+  const rx = mesh(new THREE.BoxGeometry(0.16, 0.04, 0.1), carbon);
+  rx.position.set(0.15, 0.44, -0.1);
+
+  const batt = mesh(new THREE.BoxGeometry(0.55, 0.14, 1.05), carbonLight);
+  batt.position.set(0, 0.0, 0.05);
+  const battStrap = mesh(new THREE.BoxGeometry(0.58, 0.03, 0.08), alum);
+  battStrap.position.set(0, 0.08, 0.05);
+  const battStrap2 = mesh(new THREE.BoxGeometry(0.58, 0.03, 0.08), alum);
+  battStrap2.position.set(0, 0.08, 0.35);
+
+  const mast = mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.35, 8), alum);
+  mast.position.set(0, 0.55, 0.25);
+  const gps = mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.04, 20), carbonLight);
+  gps.position.set(0, 0.74, 0.25);
+
+  // FPV / cam
+  const camBody = mesh(new THREE.BoxGeometry(0.18, 0.12, 0.16), carbon);
+  camBody.position.set(0, 0.18, -0.55);
+  const camCage = mesh(new THREE.BoxGeometry(0.22, 0.04, 0.04), alum);
+  camCage.position.set(0, 0.12, -0.55);
+  const lens = mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.06, 16), alum);
+  lens.rotation.x = Math.PI / 2;
+  lens.position.set(0, 0.18, -0.64);
+
+  function makeSkid(x) {
+    const g = new THREE.Group();
+    drone.add(g);
+    const legF = mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.35, 8), alum, g);
+    legF.position.set(x, -0.05, -0.25);
+    legF.rotation.z = x > 0 ? -0.35 : 0.35;
+    const legR = mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.35, 8), alum, g);
+    legR.position.set(x, -0.05, 0.35);
+    legR.rotation.z = x > 0 ? -0.35 : 0.35;
+    const ski = mesh(new THREE.BoxGeometry(0.06, 0.03, 0.95), carbonLight, g);
+    ski.position.set(x * 1.15, -0.22, 0.05);
+  }
+  makeSkid(-0.35);
+  makeSkid(0.35);
+
+  // ---- X arms ----
+  const ARM_LEN = 1.55;
+  const arms = [
+    { yaw:  Math.PI * 0.25, front: true  }, // FR
+    { yaw: -Math.PI * 0.25, front: true  }, // FL
+    { yaw:  Math.PI * 0.75, front: false }, // RR
+    { yaw: -Math.PI * 0.75, front: false }, // RL
+  ];
+
+  const propGroups = [];
+
+  function blade() {
+    const shape = new THREE.Shape();
+    shape.moveTo(0, -0.04);
+    shape.quadraticCurveTo(0.35, -0.07, 0.75, -0.02);
+    shape.quadraticCurveTo(0.78, 0, 0.75, 0.02);
+    shape.quadraticCurveTo(0.35, 0.07, 0, 0.04);
+    shape.lineTo(0, -0.04);
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      steps: 1, depth: 0.012, bevelEnabled: false
+    });
+    geo.center();
+    const m = new THREE.Mesh(geo, propMat); // same mat every time
+    m.rotation.x = -Math.PI / 2;
+    m.castShadow = true;
+    return m;
+  }
+
+  arms.forEach((cfg, idx) => {
+    const armRoot = new THREE.Group();
+    armRoot.rotation.y = cfg.yaw;
+    drone.add(armRoot);
+
+    const tube = mesh(
+      new THREE.CylinderGeometry(0.035, 0.04, ARM_LEN, 12),
+      carbon,
+      armRoot
+    );
+    tube.rotation.x = Math.PI / 2;
+    tube.position.set(0, 0.22, ARM_LEN * 0.42);
+
+    // second thin boom sleeve for a bit more realism
+    const sleeve = mesh(
+      new THREE.CylinderGeometry(0.045, 0.045, 0.18, 12),
+      carbonLight,
+      armRoot
+    );
+    sleeve.rotation.x = Math.PI / 2;
+    sleeve.position.set(0, 0.22, ARM_LEN * 0.55);
+
+    const clamp = mesh(new THREE.BoxGeometry(0.12, 0.08, 0.16), alum, armRoot);
+    clamp.position.set(0, 0.22, 0.18);
+
+    const mountZ = ARM_LEN * 0.78;
+    const mount = mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.03, 20), alum, armRoot);
+    mount.position.set(0, 0.22, mountZ);
+
+    const motor = mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.16, 24), motorMat, armRoot);
+    motor.position.set(0, 0.32, mountZ);
+
+    // motor top cap + shaft
+    const cap = mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.04, 16), alum, armRoot);
+    cap.position.set(0, 0.42, mountZ);
+    const shaft = mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.06, 8), alum, armRoot);
+    shaft.position.set(0, 0.46, mountZ);
+
+    // orientation tips on arms only (NOT props)
+    const tip = mesh(
+      new THREE.BoxGeometry(0.08, 0.03, 0.1),
+      cfg.front ? tipFront : tipRear,
+      armRoot
+    );
+    tip.position.set(0, 0.22, mountZ - 0.2);
+
+    const prop = new THREE.Group();
+    prop.position.set(0, 0.48, mountZ);
+    armRoot.add(prop);
+
+    const b1 = blade();
+    b1.position.x = 0.38;
+    prop.add(b1);
+    const b2 = blade();
+    b2.rotation.y = Math.PI;
+    b2.position.x = -0.38;
+    prop.add(b2);
+
+    const disc = new THREE.Mesh(
+      new THREE.RingGeometry(0.15, 0.78, 36),
+      new THREE.MeshBasicMaterial({
+        color: 0x888888,
+        transparent: true,
+        opacity: 0.05,
+        side: THREE.DoubleSide,
+      })
+    );
+    disc.rotation.x = -Math.PI / 2;
+    prop.add(disc);
+
+    // Quad-X: diagonals same spin (FR+RL, FL+RR)
+    const dir = (idx === 0 || idx === 3) ? 1 : -1;
+    propGroups.push({ group: prop, dir: dir });
+  });
+
+  let target = { roll: 0, pitch: 0, yaw: 0 };
+  let current = { roll: 0, pitch: 0, yaw: 0 };
+
+  window.setAttitude = function (roll, pitch, yaw) {
+    target.roll = roll || 0;
+    target.pitch = pitch || 0;
+    target.yaw = yaw || 0;
+  };
+
+  window.resetCamera = function () {
+    camera.position.set(4.0, 2.8, 5.0);
+    controls.target.set(0, 0.25, 0);
+  };
+
+  window.addEventListener('message', function (e) {
+    const d = e.data;
+    if (!d || typeof d !== 'object') return;
+    if (d.type === 'attitude') window.setAttitude(d.roll, d.pitch, d.yaw);
+    if (d.type === 'resetCamera') window.resetCamera();
+  });
+
+  function resize() {
+    const w = window.innerWidth;
+    const h = Math.max(window.innerHeight, 1);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h, false);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    current.roll = lerp(current.roll, target.roll, 0.18);
+    current.pitch = lerp(current.pitch, target.pitch, 0.18);
+    current.yaw = lerp(current.yaw, target.yaw, 0.18);
+    drone.rotation.set(
+      current.pitch * Math.PI / 180,
+      -current.yaw * Math.PI / 180,
+      -current.roll * Math.PI / 180
+    );
+    propGroups.forEach(pg => { pg.group.rotation.y += 1.1 * pg.dir; });
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
+})();
+</script>
+</body>
+</html>

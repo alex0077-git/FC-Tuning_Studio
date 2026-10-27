@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'connect_screen.dart';
 import 'tuning_screen.dart';
 import 'logs_screen.dart';
+import 'view3d_screen.dart';
 
 class ShellScreen extends StatefulWidget {
   const ShellScreen({super.key});
@@ -56,7 +57,7 @@ class _ShellScreenState extends State<ShellScreen> {
       ),
       _LockedPage(
         locked: !_connected,
-        child: const _PlaceholderPage(title: '3D View'),
+        child: const View3dScreen(),
       ),
     ];
 

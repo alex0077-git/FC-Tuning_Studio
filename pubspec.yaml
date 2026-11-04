@@ -33,6 +33,7 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   fl_chart: ^0.69.0
+  path_provider: ^2.1.5
   webview_flutter: ^4.10.0
 
 dev_dependencies:
@@ -71,6 +72,7 @@ flutter:
   assets:
   - assets/3d/
   - assets/3d/vendor/
+  - assets/params_catalog.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -1,4 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../layout/g20_metrics.dart';
+import '../link/mav_session.dart';
 import '../theme/app_theme.dart';
 import 'connect_screen.dart';
 import 'logs_screen.dart';
@@ -13,35 +18,59 @@ class ShellScreen extends StatefulWidget {
 }
 
 class _ShellScreenState extends State<ShellScreen> {
-  // 0 = Connect, 1 = Tuning, 2 = Logs, 3 = 3D View
   int _pageIndex = 0;
+  final MavSession _session = MavSession();
+  StreamSubscription? _hbSub;
 
   bool _connected = false;
   bool _armed = false;
   String _firmware = '—';
-  String _preset = 'Default';
+
+  @override
+  void dispose() {
+    _hbSub?.cancel();
+    _session.dispose();
+    super.dispose();
+  }
 
   void _openConnect() => setState(() => _pageIndex = 0);
 
+  void _listenArmed() {
+    _hbSub?.cancel();
+    _hbSub = _session.heartbeats.listen((hb) {
+      if (!mounted) return;
+      if (_armed != hb.armed) setState(() => _armed = hb.armed);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final pages = [
+    final g20 = G20Metrics.of(context);
+
+    // IndexedStack keeps Tuning / Logs / 3D alive so Live Log keeps filling
+    // while the user is on another tab.
+    final pages = <Widget>[
       ConnectScreen(
+        key: const ValueKey('connect'),
+        session: _session,
         connected: _connected,
         onConnected: ({
           required firmware,
           required boardId,
           required parameterCount,
           required linkQualityPercent,
+          required armed,
         }) {
           setState(() {
             _connected = true;
-            _armed = false;
+            _armed = armed;
             _firmware = firmware;
             _pageIndex = 1;
           });
+          _listenArmed();
         },
         onDisconnected: () {
+          _hbSub?.cancel();
           setState(() {
             _connected = false;
             _armed = false;
@@ -51,19 +80,34 @@ class _ShellScreenState extends State<ShellScreen> {
         },
       ),
       _LockedPage(
+        key: const ValueKey('tuning'),
         locked: !_connected,
         onConnectTap: _openConnect,
-        child: TuningScreen(armed: _armed),
+        // Stable key: keep PID edit state across tab switches.
+        child: TuningScreen(
+          key: const ValueKey('tuning-screen'),
+          session: _session,
+          armed: _armed,
+        ),
       ),
       _LockedPage(
+        key: const ValueKey('logs'),
         locked: !_connected,
         onConnectTap: _openConnect,
-        child: const LogsScreen(),
+        // IndexedStack + key: Live Log / graphs keep filling off-tab.
+        child: LogsScreen(
+          key: const ValueKey('logs-screen'),
+          session: _connected ? _session : null,
+        ),
       ),
       _LockedPage(
+        key: const ValueKey('view3d'),
         locked: !_connected,
         onConnectTap: _openConnect,
-        child: const View3dScreen(),
+        child: View3dScreen(
+          key: const ValueKey('view3d-screen'),
+          session: _connected ? _session : null,
+        ),
       ),
     ];
 
@@ -75,34 +119,37 @@ class _ShellScreenState extends State<ShellScreen> {
               connected: _connected,
               armed: _armed,
               firmware: _firmware,
-              preset: _preset,
+              compact: g20.compactChrome,
               onMenuTap: _openConnect,
             ),
-            Expanded(child: pages[_pageIndex]),
+            Expanded(
+              child: IndexedStack(
+                index: _pageIndex,
+                children: pages,
+              ),
+            ),
           ],
         ),
       ),
       bottomNavigationBar: NavigationBar(
-        height: 64,
+        height: g20.navHeight,
         selectedIndex: _pageIndex == 0 ? 0 : _pageIndex - 1,
-        onDestinationSelected: (i) {
-          setState(() => _pageIndex = i + 1);
-        },
+        onDestinationSelected: (i) => setState(() => _pageIndex = i + 1),
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.tune_outlined),
-            selectedIcon: Icon(Icons.tune),
+            icon: Icon(Icons.tune_outlined, size: 18),
+            selectedIcon: Icon(Icons.tune, size: 18),
             label: 'Tuning',
           ),
           NavigationDestination(
-            icon: Icon(Icons.bar_chart_outlined),
-            selectedIcon: Icon(Icons.bar_chart),
+            icon: Icon(Icons.bar_chart_outlined, size: 18),
+            selectedIcon: Icon(Icons.bar_chart, size: 18),
             label: 'Logs',
           ),
           NavigationDestination(
-            icon: Icon(Icons.view_in_ar_outlined),
-            selectedIcon: Icon(Icons.view_in_ar),
-            label: '3D View',
+            icon: Icon(Icons.view_in_ar_outlined, size: 18),
+            selectedIcon: Icon(Icons.view_in_ar, size: 18),
+            label: '3D',
           ),
         ],
       ),
@@ -115,64 +162,69 @@ class _StatusBar extends StatelessWidget {
     required this.connected,
     required this.armed,
     required this.firmware,
-    required this.preset,
+    required this.compact,
     required this.onMenuTap,
   });
 
   final bool connected;
   final bool armed;
   final String firmware;
-  final String preset;
+  final bool compact;
   final VoidCallback onMenuTap;
 
   @override
   Widget build(BuildContext context) {
     final dotColor = connected ? AppColors.success : AppColors.danger;
-
     return Material(
       color: AppColors.surface,
       child: InkWell(
         onTap: onMenuTap,
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 8 : 12,
+            vertical: compact ? 4 : 8,
+          ),
           decoration: const BoxDecoration(
-            border: Border(
-              bottom: BorderSide(color: AppColors.border, width: 1),
-            ),
+            border: Border(bottom: BorderSide(color: AppColors.border, width: 1)),
           ),
           child: Row(
             children: [
               IconButton(
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                constraints: BoxConstraints(
+                  minWidth: compact ? 30 : 36,
+                  minHeight: compact ? 30 : 36,
+                ),
                 onPressed: onMenuTap,
-                icon: const Icon(Icons.menu, size: 22, color: AppColors.text),
-                tooltip: 'Connection',
+                icon: Icon(
+                  Icons.menu,
+                  size: compact ? 18 : 22,
+                  color: AppColors.text,
+                ),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 2),
               Container(
-                width: 8,
-                height: 8,
+                width: 7,
+                height: 7,
                 decoration: BoxDecoration(
                   color: dotColor,
                   shape: BoxShape.circle,
                   boxShadow: [
-                    BoxShadow(
-                      color: dotColor.withOpacity(0.55),
-                      blurRadius: 6,
-                    ),
+                    BoxShadow(color: dotColor.withValues(alpha: 0.55), blurRadius: 5),
                   ],
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text.rich(
                   TextSpan(
-                    style: const TextStyle(fontSize: 12, color: AppColors.muted),
+                    style: TextStyle(
+                      fontSize: compact ? 11 : 12,
+                      color: AppColors.muted,
+                    ),
                     children: [
-                      const TextSpan(text: 'Status: '),
                       TextSpan(
                         text: connected ? 'Connected' : 'Disconnected',
                         style: TextStyle(
@@ -181,9 +233,7 @@ class _StatusBar extends StatelessWidget {
                         ),
                       ),
                       TextSpan(
-                        text: '  |  Armed: ${armed ? 'Yes' : 'No'}'
-                            '  |  FW: $firmware'
-                            '  |  Preset: $preset',
+                        text: '  ·  Armed ${armed ? 'Yes' : 'No'}  ·  $firmware',
                       ),
                     ],
                   ),
@@ -200,11 +250,11 @@ class _StatusBar extends StatelessWidget {
 
 class _LockedPage extends StatelessWidget {
   const _LockedPage({
+    super.key,
     required this.locked,
     required this.child,
     required this.onConnectTap,
   });
-
   final bool locked;
   final Widget child;
   final VoidCallback onConnectTap;
@@ -224,37 +274,38 @@ class _LockedPage extends StatelessWidget {
               child: Center(
                 child: Container(
                   margin: const EdgeInsets.symmetric(horizontal: 28),
-                  padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
                   decoration: BoxDecoration(
                     color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppColors.border),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.link_off, color: AppColors.muted, size: 28),
-                      const SizedBox(height: 10),
+                      const Icon(Icons.link_off, color: AppColors.muted, size: 22),
+                      const SizedBox(height: 8),
                       const Text(
                         'FC not connected',
                         style: TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: AppColors.text,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 4),
                       const Text(
-                        'Connect to the flight controller to unlock this page.',
+                        'Connect to unlock this page.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 13, color: AppColors.muted),
+                        style: TextStyle(fontSize: 12, color: AppColors.muted),
                       ),
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 10),
                       SizedBox(
                         width: double.infinity,
+                        height: 36,
                         child: ElevatedButton.icon(
                           onPressed: onConnectTap,
-                          icon: const Icon(Icons.link, size: 18),
+                          icon: const Icon(Icons.link, size: 16),
                           label: const Text('Go to Connect'),
                         ),
                       ),

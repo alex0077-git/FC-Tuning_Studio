@@ -1,22 +1,34 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../layout/g20_metrics.dart';
+import '../link/g20_udp_link.dart';
+import '../link/mav_session.dart';
+import '../link/t12_spp_link.dart';
 import '../theme/app_theme.dart';
 
-enum LinkType { wifi, bluetooth }
+enum LinkType { g20, t12 }
 
 class ConnectScreen extends StatefulWidget {
   const ConnectScreen({
     super.key,
+    required this.session,
     required this.connected,
     required this.onConnected,
     required this.onDisconnected,
   });
 
+  final MavSession session;
   final bool connected;
   final void Function({
     required String firmware,
     required String boardId,
     required int parameterCount,
     required int linkQualityPercent,
+    required bool armed,
   }) onConnected;
   final VoidCallback onDisconnected;
 
@@ -25,27 +37,47 @@ class ConnectScreen extends StatefulWidget {
 }
 
 class _ConnectScreenState extends State<ConnectScreen> {
-  LinkType _linkType = LinkType.wifi;
+  LinkType _linkType = LinkType.g20;
   bool _busy = false;
 
-  final _addressController = TextEditingController(text: '192.168.144.1');
-  final _portController = TextEditingController(text: '14550');
-  String _btDevice = 'Skydroid T12';
+  List<BondedBtDevice> _btDevices = [];
+  String? _btAddress;
 
   String _firmware = '—';
   String _boardId = '—';
   String _parameters = '—';
   String _linkQuality = '—';
 
-  @override
-  void dispose() {
-    _addressController.dispose();
-    _portController.dispose();
-    super.dispose();
+  Future<void> _refreshBt() async {
+    try {
+      final list = await T12SppLink.bonded();
+      setState(() {
+        _btDevices = list;
+        if (_btAddress == null || !list.any((d) => d.address == _btAddress)) {
+          _btAddress = list.isEmpty ? null : list.first.address;
+        }
+      });
+      if (!mounted) return;
+      if (list.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'T12 BT not in this APK — use G20 UDP. T12 SPP comes in a later build.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('BT refresh failed: $e')),
+      );
+    }
   }
 
   Future<void> _toggleConnect() async {
     if (widget.connected) {
+      await widget.session.disconnect();
       setState(() {
         _firmware = '—';
         _boardId = '—';
@@ -57,132 +89,199 @@ class _ConnectScreenState extends State<ConnectScreen> {
     }
 
     setState(() => _busy = true);
-    await Future<void>.delayed(const Duration(milliseconds: 700));
-    if (!mounted) return;
+    try {
+      if (_linkType == LinkType.g20) {
+        await widget.session.connect(G20UdpLink());
+      } else {
+        final addr = _btAddress;
+        if (addr == null) {
+          throw StateError(
+            'T12 Bluetooth is not in this APK build. Switch to G20 Wi‑Fi.',
+          );
+        }
+        await widget.session.connect(T12SppLink(address: addr));
+      }
 
-    const firmware = 'v1.0';
-    const boardId = 'FC-MOCK-650';
-    const parameterCount = 42;
-    const linkQuality = 97;
+      await widget.session.waitHeartbeat();
 
-    setState(() {
-      _busy = false;
-      _firmware = firmware;
-      _boardId = boardId;
-      _parameters = '$parameterCount';
-      _linkQuality = '$linkQuality%';
-    });
+      var usedCatalogFallback = false;
+      try {
+        await widget.session.downloadParams();
+      } catch (e) {
+        // HEARTBEAT/ATTITUDE already prove the link. If PARAM_VALUE never
+        // arrives, seed catalog defaults so Tuning/3D still open (QGC-proven FC).
+        final defaults = await _catalogDefaults();
+        if (defaults.isEmpty) rethrow;
+        widget.session.seedParams(defaults);
+        usedCatalogFallback = true;
+        if (mounted) {
+          final link = widget.session;
+          final hint = link.msgidCounts.isEmpty
+              ? ''
+              : ' msgs=${link.msgidCounts}';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              duration: const Duration(seconds: 5),
+              content: Text(
+                'Linked (HB OK) — live params missing, catalog defaults.$hint '
+                'Close QGC. Write needs app→FC uplink.',
+              ),
+            ),
+          );
+        }
+      }
 
-    widget.onConnected(
-      firmware: firmware,
-      boardId: boardId,
-      parameterCount: parameterCount,
-      linkQualityPercent: linkQuality,
-    );
+      final count = widget.session.params.length;
+      final armed = widget.session.armed;
+
+      setState(() {
+        _busy = false;
+        _firmware = 'MAVLink v2';
+        _boardId = 'sys 1 / comp 1';
+        _parameters = usedCatalogFallback ? '$count (catalog)' : '$count';
+        _linkQuality = armed ? 'armed' : 'disarmed';
+      });
+
+      widget.onConnected(
+        firmware: _firmware,
+        boardId: _boardId,
+        parameterCount: count,
+        linkQualityPercent: 100,
+        armed: armed,
+      );
+    } catch (e) {
+      await widget.session.disconnect();
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final msg = e is TimeoutException
+          ? e.message ?? e.toString()
+          : e.toString();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 8),
+          content: Text(msg),
+        ),
+      );
+    }
+  }
+
+  Future<Map<String, double>> _catalogDefaults() async {
+    try {
+      final raw = await rootBundle.loadString('assets/params_catalog.json');
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      final list = json['params'] as List<dynamic>? ?? [];
+      final out = <String, double>{};
+      for (final item in list) {
+        final m = item as Map<String, dynamic>;
+        final id = m['id'] as String?;
+        final def = m['default'];
+        if (id == null || def == null) continue;
+        out[id] = (def as num).toDouble();
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final locked = widget.connected || _busy;
+    final g20 = G20Metrics.of(context);
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      padding: EdgeInsets.fromLTRB(g20.pagePad + 4, g20.pagePad, g20.pagePad + 4, 16),
       children: [
-        const Text(
+        Text(
           'Connect to Flight Controller',
           style: TextStyle(
-            fontSize: 22,
+            fontSize: g20.compactChrome ? 18 : 22,
             fontWeight: FontWeight.w600,
             color: AppColors.text,
           ),
         ),
-        const SizedBox(height: 6),
-        const Text(
-          'Link through Skydroid G20 / T12 (Wi‑Fi or Bluetooth).',
-          style: TextStyle(fontSize: 13, color: AppColors.muted),
+        const SizedBox(height: 4),
+        Text(
+          'G20 UDP 14551 → 127.0.0.1:14552  ·  MAVLink v2',
+          style: TextStyle(fontSize: g20.bodySize, color: AppColors.muted),
         ),
-        const SizedBox(height: 18),
-        _Card(
+        SizedBox(height: g20.compactChrome ? 10 : 18),
+        Container(
+          padding: EdgeInsets.all(g20.compactChrome ? 10 : 14),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.border),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               SegmentedButton<LinkType>(
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
                 segments: const [
                   ButtonSegment(
-                    value: LinkType.wifi,
-                    label: Text('Wi‑Fi'),
-                    icon: Icon(Icons.wifi, size: 18),
+                    value: LinkType.g20,
+                    label: Text('G20 Wi‑Fi'),
+                    icon: Icon(Icons.wifi, size: 16),
                   ),
                   ButtonSegment(
-                    value: LinkType.bluetooth,
-                    label: Text('Bluetooth'),
-                    icon: Icon(Icons.bluetooth, size: 18),
+                    value: LinkType.t12,
+                    label: Text('T12 BT'),
+                    icon: Icon(Icons.bluetooth, size: 16),
                   ),
                 ],
                 selected: {_linkType},
                 onSelectionChanged: locked
                     ? null
-                    : (selected) {
-                        setState(() => _linkType = selected.first);
+                    : (s) {
+                        setState(() => _linkType = s.first);
+                        if (_linkType == LinkType.t12) _refreshBt();
                       },
               ),
-              const SizedBox(height: 14),
-              if (_linkType == LinkType.wifi) ...[
-                TextField(
-                  controller: _addressController,
-                  enabled: !locked,
-                  decoration: const InputDecoration(
-                    labelText: 'Address',
-                    prefixIcon: Icon(Icons.lan_outlined, size: 20),
-                  ),
+              const SizedBox(height: 10),
+              if (_linkType == LinkType.g20)
+                const Text(
+                  'Install and run this APK on the G20 itself.',
+                  style: TextStyle(fontSize: 12, color: AppColors.muted),
+                )
+              else ...[
+                const Text(
+                  'T12 Classic SPP is stubbed in this APK (AGP 9). Use G20 for bench test.',
+                  style: TextStyle(fontSize: 12, color: AppColors.muted),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _portController,
-                  enabled: !locked,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Port',
-                    prefixIcon: Icon(Icons.numbers, size: 20),
-                  ),
-                ),
-              ] else
+                const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  value: _btDevice,
+                  value: _btAddress,
                   decoration: const InputDecoration(
-                    labelText: 'Device',
+                    labelText: 'Paired device',
                     prefixIcon: Icon(Icons.phone_android, size: 20),
                   ),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'Skydroid T12',
-                      child: Text('Skydroid T12'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'Skydroid G20',
-                      child: Text('Skydroid G20'),
-                    ),
+                  items: [
+                    for (final d in _btDevices)
+                      DropdownMenuItem(
+                        value: d.address,
+                        child: Text(d.name.isNotEmpty ? d.name : d.address),
+                      ),
                   ],
-                  onChanged: locked
-                      ? null
-                      : (value) {
-                          if (value != null) {
-                            setState(() => _btDevice = value);
-                          }
-                        },
+                  onChanged:
+                      locked ? null : (v) => setState(() => _btAddress = v),
                 ),
-              const SizedBox(height: 16),
+              ],
+              const SizedBox(height: 12),
               ElevatedButton(
                 onPressed: _busy ? null : _toggleConnect,
-                style: widget.connected
-                    ? ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.danger,
-                      )
-                    : null,
+                style: ElevatedButton.styleFrom(
+                  minimumSize: Size.fromHeight(g20.compactChrome ? 42 : 48),
+                  backgroundColor:
+                      widget.connected ? AppColors.danger : AppColors.accent,
+                ),
                 child: _busy
                     ? const SizedBox(
-                        height: 22,
-                        width: 22,
+                        height: 20,
+                        width: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2.4,
                           color: Colors.white,
@@ -190,107 +289,76 @@ class _ConnectScreenState extends State<ConnectScreen> {
                       )
                     : Text(widget.connected ? 'Disconnect' : 'Connect'),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: locked
                     ? null
                     : () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              _linkType == LinkType.wifi
-                                  ? 'Ports refreshed (mock)'
-                                  : 'Devices refreshed (mock)',
+                        if (_linkType == LinkType.t12) {
+                          _refreshBt();
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'G20 uses fixed UDP ports (Phase B)',
+                              ),
                             ),
-                          ),
-                        );
+                          );
+                        }
                       },
                 icon: const Icon(Icons.refresh, size: 18),
                 label: Text(
-                  _linkType == LinkType.wifi
-                      ? 'Refresh ports'
-                      : 'Refresh devices',
+                  _linkType == LinkType.t12
+                      ? 'Refresh devices'
+                      : 'G20 ports locked',
                 ),
               ),
             ],
           ),
         ),
         const SizedBox(height: 14),
-        _Card(
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.border),
+          ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Device info',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.text,
-                ),
-              ),
-              const SizedBox(height: 10),
-              _InfoRow(label: 'Firmware', value: _firmware),
-              _InfoRow(label: 'Board ID', value: _boardId),
-              _InfoRow(label: 'Parameters', value: _parameters),
-              _InfoRow(label: 'Link quality', value: _linkQuality),
+              _row('Firmware', _firmware),
+              _row('Board ID', _boardId),
+              _row('Parameters', _parameters),
+              _row('Link', _linkQuality),
             ],
           ),
         ),
       ],
     );
   }
-}
 
-class _Card extends StatelessWidget {
-  const _Card({required this.child});
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: child,
-    );
-  }
-}
-
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 110,
-            child: Text(
-              label,
-              style: const TextStyle(color: AppColors.muted, fontSize: 13),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(
-                color: AppColors.text,
-                fontWeight: FontWeight.w500,
-                fontSize: 13,
+  Widget _row(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 110,
+              child: Text(
+                label,
+                style: const TextStyle(color: AppColors.muted, fontSize: 13),
               ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
+            Expanded(
+              child: Text(
+                value,
+                style: const TextStyle(
+                  color: AppColors.text,
+                  fontWeight: FontWeight.w500,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
 }

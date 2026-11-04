@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+
+import '../layout/g20_metrics.dart';
+import '../link/mav_session.dart';
 import '../theme/app_theme.dart';
 
 enum _Tab { outer, inner, altHold }
@@ -9,23 +12,23 @@ class _Pid {
   double p;
   double i;
   double d;
-
   _Pid clone() => _Pid(p: p, i: i, d: d);
 }
 
 class _Gains {
   _Gains({
-    this.outerRollP = 4.5,
-    this.outerPitchP = 4.5,
-    this.outerYawP = 3.0,
+    this.outerRollP = 6,
+    this.outerPitchP = 8,
+    this.outerYawP = 0,
     _Pid? innerRoll,
     _Pid? innerPitch,
     _Pid? innerYaw,
     _Pid? altHold,
-  })  : innerRoll = innerRoll ?? _Pid(p: 0.15, i: 0.05, d: 0.02),
-        innerPitch = innerPitch ?? _Pid(p: 0.15, i: 0.05, d: 0.02),
-        innerYaw = innerYaw ?? _Pid(p: 0.20, i: 0.04, d: 0.00),
-        altHold = altHold ?? _Pid(p: 0.80, i: 0.10, d: 0.05);
+  })  : innerRoll = innerRoll ?? _Pid(p: 1.0, i: 0, d: 0.04),
+        innerPitch = innerPitch ?? _Pid(p: 1.2, i: 0, d: 0.04),
+        innerYaw = innerYaw ?? _Pid(p: 0.5, i: 0, d: 0.02),
+        // altHold.d stores ALT_CORR_MAX (not a D term)
+        altHold = altHold ?? _Pid(p: 100, i: 10, d: 200);
 
   double outerRollP;
   double outerPitchP;
@@ -46,9 +49,28 @@ class _Gains {
       );
 }
 
-class TuningScreen extends StatefulWidget {
-  const TuningScreen({super.key, this.armed = false});
+abstract final class FcParamIds {
+  static const outerRoll = 'ROLL_AP';
+  static const outerPitch = 'PITCH_AP';
+  static const outerYaw = 'YAW_AP';
+  static const rollP = 'ROLL_KP';
+  static const rollI = 'ROLL_KI';
+  static const rollD = 'ROLL_KD';
+  static const pitchP = 'PITCH_KP';
+  static const pitchI = 'PITCH_KI';
+  static const pitchD = 'PITCH_KD';
+  static const yawP = 'YAW_KP';
+  static const yawI = 'YAW_KI';
+  static const yawD = 'YAW_KD';
+  static const altP = 'ALT_KP';
+  static const altI = 'ALT_KI';
+  static const altMax = 'ALT_CORR_MAX';
+}
 
+class TuningScreen extends StatefulWidget {
+  const TuningScreen({super.key, required this.session, this.armed = false});
+
+  final MavSession session;
   final bool armed;
 
   @override
@@ -62,13 +84,14 @@ class _TuningScreenState extends State<TuningScreen>
   late _Gains _edited;
 
   _Axis _axis = _Axis.roll;
-  bool _linkRollPitch = true;
+  bool _linkRollPitch = false;
+  bool _writing = false;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _fc = _Gains();
+    _fc = _gainsFromParams(widget.session.params);
     _edited = _fc.clone();
   }
 
@@ -78,16 +101,82 @@ class _TuningScreenState extends State<TuningScreen>
     super.dispose();
   }
 
-  Future<void> _write() async {
-    await Future<void>.delayed(const Duration(milliseconds: 350));
-    if (!mounted) return;
-    setState(() {
-      _fc = _edited.clone();
-      _edited = _fc.clone();
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Write verified — FC values updated')),
+  _Gains _gainsFromParams(Map<String, double> p) {
+    double g(String id, double fb) => p[id] ?? fb;
+    return _Gains(
+      outerRollP: g(FcParamIds.outerRoll, 6),
+      outerPitchP: g(FcParamIds.outerPitch, 8),
+      outerYawP: g(FcParamIds.outerYaw, 0),
+      innerRoll: _Pid(
+        p: g(FcParamIds.rollP, 1.0),
+        i: g(FcParamIds.rollI, 0),
+        d: g(FcParamIds.rollD, 0.04),
+      ),
+      innerPitch: _Pid(
+        p: g(FcParamIds.pitchP, 1.2),
+        i: g(FcParamIds.pitchI, 0),
+        d: g(FcParamIds.pitchD, 0.04),
+      ),
+      innerYaw: _Pid(
+        p: g(FcParamIds.yawP, 0.5),
+        i: g(FcParamIds.yawI, 0),
+        d: g(FcParamIds.yawD, 0.02),
+      ),
+      altHold: _Pid(
+        p: g(FcParamIds.altP, 100),
+        i: g(FcParamIds.altI, 10),
+        d: g(FcParamIds.altMax, 200),
+      ),
     );
+  }
+
+  Future<void> _write() async {
+    if (_writing) return;
+    setState(() => _writing = true);
+    try {
+      Future<void> w(String id, double v) async {
+        final stored = await widget.session.setParam(id, v);
+        widget.session.params[id] = stored;
+      }
+
+      // Write only dirty params (faster; clearer uplink failures).
+      Future<void> maybe(String id, double edited, double fc) async {
+        if ((edited - fc).abs() < 1e-6) return;
+        await w(id, edited);
+      }
+
+      await maybe(FcParamIds.outerRoll, _edited.outerRollP, _fc.outerRollP);
+      await maybe(FcParamIds.outerPitch, _edited.outerPitchP, _fc.outerPitchP);
+      await maybe(FcParamIds.outerYaw, _edited.outerYawP, _fc.outerYawP);
+      await maybe(FcParamIds.rollP, _edited.innerRoll.p, _fc.innerRoll.p);
+      await maybe(FcParamIds.rollI, _edited.innerRoll.i, _fc.innerRoll.i);
+      await maybe(FcParamIds.rollD, _edited.innerRoll.d, _fc.innerRoll.d);
+      await maybe(FcParamIds.pitchP, _edited.innerPitch.p, _fc.innerPitch.p);
+      await maybe(FcParamIds.pitchI, _edited.innerPitch.i, _fc.innerPitch.i);
+      await maybe(FcParamIds.pitchD, _edited.innerPitch.d, _fc.innerPitch.d);
+      await maybe(FcParamIds.yawP, _edited.innerYaw.p, _fc.innerYaw.p);
+      await maybe(FcParamIds.yawI, _edited.innerYaw.i, _fc.innerYaw.i);
+      await maybe(FcParamIds.yawD, _edited.innerYaw.d, _fc.innerYaw.d);
+      await maybe(FcParamIds.altP, _edited.altHold.p, _fc.altHold.p);
+      await maybe(FcParamIds.altI, _edited.altHold.i, _fc.altHold.i);
+      await maybe(FcParamIds.altMax, _edited.altHold.d, _fc.altHold.d);
+
+      if (!mounted) return;
+      setState(() {
+        _fc = _gainsFromParams(widget.session.params);
+        _edited = _fc.clone();
+        _writing = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Write verified — FC echoed values')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _writing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Write failed: $e')),
+      );
+    }
   }
 
   Future<void> _saveToFc() async {
@@ -97,26 +186,20 @@ class _TuningScreenState extends State<TuningScreen>
         backgroundColor: AppColors.surface,
         title: const Text('Save to FC?'),
         content: const Text(
-          'Store current gains in non-volatile memory on the flight controller.',
+          'Phase B: params are RAM until reboot. There is no flash save yet. '
+          'Write still pushes values for this power cycle.',
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Save'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Write anyway')),
         ],
       ),
     );
     if (ok != true) return;
     await _write();
-    await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Saved to FC non-volatile memory')),
+      const SnackBar(content: Text('Values on FC until reboot (not flash)')),
     );
   }
 
@@ -127,27 +210,42 @@ class _TuningScreenState extends State<TuningScreen>
     );
   }
 
-  bool get _dirty {
-    // Cheap “unsaved edits” hint for the footer.
-    return _edited.outerRollP != _fc.outerRollP ||
-        _edited.outerPitchP != _fc.outerPitchP ||
-        _edited.outerYawP != _fc.outerYawP ||
-        _edited.innerRoll.p != _fc.innerRoll.p ||
-        _edited.innerRoll.i != _fc.innerRoll.i ||
-        _edited.innerRoll.d != _fc.innerRoll.d ||
-        _edited.innerPitch.p != _fc.innerPitch.p ||
-        _edited.innerPitch.i != _fc.innerPitch.i ||
-        _edited.innerPitch.d != _fc.innerPitch.d ||
-        _edited.innerYaw.p != _fc.innerYaw.p ||
-        _edited.innerYaw.i != _fc.innerYaw.i ||
-        _edited.innerYaw.d != _fc.innerYaw.d ||
-        _edited.altHold.p != _fc.altHold.p ||
-        _edited.altHold.i != _fc.altHold.i ||
-        _edited.altHold.d != _fc.altHold.d;
+  void _reloadFromFc() {
+    setState(() {
+      _fc = _gainsFromParams(widget.session.params);
+      _edited = _fc.clone();
+    });
   }
+
+  bool get _dirty =>
+      _edited.outerRollP != _fc.outerRollP ||
+      _edited.outerPitchP != _fc.outerPitchP ||
+      _edited.outerYawP != _fc.outerYawP ||
+      _edited.innerRoll.p != _fc.innerRoll.p ||
+      _edited.innerRoll.i != _fc.innerRoll.i ||
+      _edited.innerRoll.d != _fc.innerRoll.d ||
+      _edited.innerPitch.p != _fc.innerPitch.p ||
+      _edited.innerPitch.i != _fc.innerPitch.i ||
+      _edited.innerPitch.d != _fc.innerPitch.d ||
+      _edited.innerYaw.p != _fc.innerYaw.p ||
+      _edited.innerYaw.i != _fc.innerYaw.i ||
+      _edited.innerYaw.d != _fc.innerYaw.d ||
+      _edited.altHold.p != _fc.altHold.p ||
+      _edited.altHold.i != _fc.altHold.i ||
+      _edited.altHold.d != _fc.altHold.d;
+
+  ButtonStyle get _compactBtn => ElevatedButton.styleFrom(
+        minimumSize: const Size(0, 32),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+      );
 
   @override
   Widget build(BuildContext context) {
+    final g20 = G20Metrics.of(context);
+    final tabH = g20.compactChrome ? 30.0 : 34.0;
     return Column(
       children: [
         Material(
@@ -158,64 +256,78 @@ class _TuningScreenState extends State<TuningScreen>
             labelColor: AppColors.accent,
             unselectedLabelColor: AppColors.muted,
             indicatorColor: AppColors.accent,
-            indicatorWeight: 2.5,
-            tabs: const [
-              Tab(text: 'Outer loop'),
-              Tab(text: 'Inner loop'),
-              Tab(text: 'Alt Hold'),
+            indicatorWeight: 2,
+            labelStyle: TextStyle(
+              fontSize: g20.bodySize,
+              fontWeight: FontWeight.w600,
+            ),
+            unselectedLabelStyle: TextStyle(fontSize: g20.bodySize),
+            labelPadding: EdgeInsets.symmetric(horizontal: g20.pagePad),
+            tabs: [
+              Tab(height: tabH, text: 'Outer'),
+              Tab(height: tabH, text: 'Inner'),
+              Tab(height: tabH, text: 'AltHold'),
             ],
           ),
         ),
         if (widget.armed)
           Container(
             width: double.infinity,
-            color: AppColors.danger.withOpacity(0.15),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            color: AppColors.danger.withValues(alpha: 0.15),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             child: const Text(
-              'Armed — Write / Save disabled',
-              style: TextStyle(color: AppColors.danger, fontSize: 12),
+              'Armed — Write disabled',
+              style: TextStyle(color: AppColors.danger, fontSize: 11),
             ),
           ),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            padding: EdgeInsets.fromLTRB(g20.pagePad, 6, g20.pagePad, 8),
             children: [
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: _reloadFromFc,
+                  icon: const Icon(Icons.refresh, size: 14),
+                  label: const Text('Reload', style: TextStyle(fontSize: 12)),
+                ),
+              ),
               if (_tabs.index != _Tab.altHold.index) ...[
                 _axisChips(),
-                const SizedBox(height: 12),
+                const SizedBox(height: 6),
               ],
               Container(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 2),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: AppColors.border),
                 ),
                 child: Column(children: _buildSliders()),
               ),
               if (_tabs.index == _Tab.inner.index) ...[
-                const SizedBox(height: 8),
                 CheckboxListTile(
+                  dense: true,
                   contentPadding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
                   activeColor: AppColors.accent,
                   title: const Text(
                     'Link roll + pitch',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                  subtitle: const Text(
-                    'Editing one axis copies values to the other',
-                    style: TextStyle(fontSize: 12, color: AppColors.muted),
+                    style: TextStyle(fontSize: 12),
                   ),
                   value: _linkRollPitch,
-                  onChanged: (v) =>
-                      setState(() => _linkRollPitch = v ?? true),
+                  onChanged: (v) => setState(() => _linkRollPitch = v ?? false),
                 ),
               ],
             ],
           ),
         ),
         Container(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
           decoration: const BoxDecoration(
             color: AppColors.surface,
             border: Border(top: BorderSide(color: AppColors.border)),
@@ -224,12 +336,12 @@ class _TuningScreenState extends State<TuningScreen>
             children: [
               if (_dirty)
                 const Padding(
-                  padding: EdgeInsets.only(bottom: 8),
+                  padding: EdgeInsets.only(bottom: 4),
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'Unsaved edits — Write to push to FC',
-                      style: TextStyle(fontSize: 11, color: AppColors.warning),
+                      'Unsaved — Write to push',
+                      style: TextStyle(fontSize: 10, color: AppColors.warning),
                     ),
                   ),
                 ),
@@ -237,28 +349,47 @@ class _TuningScreenState extends State<TuningScreen>
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: widget.armed ? null : _write,
-                      child: const Text('Write'),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 32),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: (widget.armed || _writing) ? null : _write,
+                      child: _writing
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Write'),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.success,
+                      style: _compactBtn.copyWith(
+                        backgroundColor:
+                            const WidgetStatePropertyAll(AppColors.success),
                       ),
-                      onPressed: widget.armed ? null : _saveToFc,
+                      onPressed: (widget.armed || _writing) ? null : _saveToFc,
                       child: const Text('Save to FC'),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.surface2,
-                        foregroundColor: AppColors.text,
+                      style: _compactBtn.copyWith(
+                        backgroundColor:
+                            const WidgetStatePropertyAll(AppColors.surface2),
+                        foregroundColor:
+                            const WidgetStatePropertyAll(AppColors.text),
                       ),
-                      onPressed: _revert,
+                      onPressed: _writing ? null : _revert,
                       child: const Text('Revert'),
                     ),
                   ),
@@ -279,18 +410,21 @@ class _TuningScreenState extends State<TuningScreen>
         selected: on,
         selectedColor: AppColors.accent,
         backgroundColor: AppColors.surface2,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
         labelStyle: TextStyle(
           color: on ? Colors.white : AppColors.muted,
           fontWeight: FontWeight.w600,
-          fontSize: 13,
+          fontSize: 11,
         ),
+        labelPadding: const EdgeInsets.symmetric(horizontal: 6),
         side: BorderSide(color: on ? AppColors.accent : AppColors.border),
         onSelected: (_) => setState(() => _axis = axis),
       );
     }
 
     return Wrap(
-      spacing: 8,
+      spacing: 6,
       children: [
         chip(_Axis.roll, 'Roll'),
         chip(_Axis.pitch, 'Pitch'),
@@ -306,11 +440,11 @@ class _TuningScreenState extends State<TuningScreen>
       final name = _axis.name[0].toUpperCase() + _axis.name.substring(1);
       return [
         _slider(
-          label: '$name P',
+          label: '$name AP',
           value: _outerEdited(),
           fcValue: _outerFc(),
           min: 0,
-          max: 10,
+          max: 40,
           onChanged: _setOuter,
         ),
       ];
@@ -323,7 +457,7 @@ class _TuningScreenState extends State<TuningScreen>
           value: _edited.altHold.p,
           fcValue: _fc.altHold.p,
           min: 0,
-          max: 2,
+          max: 500,
           onChanged: (v) => setState(() => _edited.altHold.p = v),
         ),
         _slider(
@@ -331,15 +465,15 @@ class _TuningScreenState extends State<TuningScreen>
           value: _edited.altHold.i,
           fcValue: _fc.altHold.i,
           min: 0,
-          max: 1,
+          max: 200,
           onChanged: (v) => setState(() => _edited.altHold.i = v),
         ),
         _slider(
-          label: 'Alt D',
+          label: 'Alt max',
           value: _edited.altHold.d,
           fcValue: _fc.altHold.d,
-          min: 0,
-          max: 1,
+          min: 10,
+          max: 400,
           onChanged: (v) => setState(() => _edited.altHold.d = v),
         ),
       ];
@@ -348,14 +482,13 @@ class _TuningScreenState extends State<TuningScreen>
     final editedPid = _innerEdited();
     final fcPid = _innerFc();
     final name = _axis.name[0].toUpperCase() + _axis.name.substring(1);
-
     return [
       _slider(
         label: '$name P',
         value: editedPid.p,
         fcValue: fcPid.p,
         min: 0,
-        max: 1,
+        max: 10,
         onChanged: (v) => _setInner((pid) => pid.p = v),
       ),
       _slider(
@@ -363,7 +496,7 @@ class _TuningScreenState extends State<TuningScreen>
         value: editedPid.i,
         fcValue: fcPid.i,
         min: 0,
-        max: 1,
+        max: 5,
         onChanged: (v) => _setInner((pid) => pid.i = v),
       ),
       _slider(
@@ -448,17 +581,16 @@ class _TuningScreenState extends State<TuningScreen>
     required ValueChanged<double> onChanged,
   }) {
     final drifted = (value - fcValue).abs() > 0.0005;
-
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 2),
       child: Row(
         children: [
           SizedBox(
-            width: 64,
+            width: 58,
             child: Text(
               label,
               style: const TextStyle(
-                fontSize: 13,
+                fontSize: 11,
                 fontWeight: FontWeight.w600,
                 color: AppColors.text,
               ),
@@ -470,8 +602,9 @@ class _TuningScreenState extends State<TuningScreen>
                 activeTrackColor: AppColors.accent,
                 inactiveTrackColor: AppColors.border,
                 thumbColor: AppColors.accent,
-                overlayColor: AppColors.accent.withOpacity(0.15),
-                trackHeight: 3,
+                overlayColor: AppColors.accent.withValues(alpha: 0.12),
+                trackHeight: 2.5,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
               ),
               child: Slider(
                 value: value.clamp(min, max),
@@ -482,21 +615,21 @@ class _TuningScreenState extends State<TuningScreen>
             ),
           ),
           SizedBox(
-            width: 78,
+            width: 64,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
                   value.toStringAsFixed(2),
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 11,
                     fontWeight: FontWeight.w700,
                     color: drifted ? AppColors.warning : AppColors.text,
                   ),
                 ),
                 Text(
                   'FC ${fcValue.toStringAsFixed(2)}',
-                  style: const TextStyle(fontSize: 11, color: AppColors.muted),
+                  style: const TextStyle(fontSize: 9, color: AppColors.muted),
                 ),
               ],
             ),

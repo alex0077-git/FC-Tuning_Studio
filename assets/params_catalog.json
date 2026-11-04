@@ -1,0 +1,64 @@
+{
+  "protocol": "MAVLink",
+  "version": 2,
+  "sysid": 1,
+  "compid": 1,
+  "uart": {
+    "pins": "PB6 TX / PB7 RX",
+    "baud": 115200,
+    "clear_frames": true
+  },
+  "persist": "ram_until_reboot",
+  "param_type": "MAV_PARAM_TYPE_REAL32",
+  "param_type_id": 9,
+  "param_count": 15,
+  "armed_param_set": "refuse_no_echo",
+  "streams": {
+    "HEARTBEAT_hz": 1,
+    "ATTITUDE_hz": 10,
+    "ATTITUDE_when": "armed_and_disarmed"
+  },
+  "g20": {
+    "run_apk_on": "g20",
+    "protocol": "UDP",
+    "listen_port": 14551,
+    "target": "127.0.0.1:14552"
+  },
+  "t12": {
+    "type": "bluetooth_classic_spp",
+    "pair": "android_settings_normal_pair",
+    "spp_uuid": "00001101-0000-1000-8000-00805F9B34FB"
+  },
+  "params": [
+    {"index": 0, "id": "ROLL_AP", "type": "float", "min": 0, "max": 40, "default": 6.0, "group": "outer", "axis": "roll", "term": "ap"},
+    {"index": 1, "id": "PITCH_AP", "type": "float", "min": 0, "max": 40, "default": 8.0, "group": "outer", "axis": "pitch", "term": "ap"},
+    {"index": 2, "id": "YAW_AP", "type": "float", "min": 0, "max": 40, "default": 0.0, "group": "outer", "axis": "yaw", "term": "ap"},
+    {"index": 3, "id": "ROLL_KP", "type": "float", "min": 0, "max": 10, "default": 1.0, "group": "inner", "axis": "roll", "term": "kp"},
+    {"index": 4, "id": "PITCH_KP", "type": "float", "min": 0, "max": 10, "default": 1.2, "group": "inner", "axis": "pitch", "term": "kp"},
+    {"index": 5, "id": "YAW_KP", "type": "float", "min": 0, "max": 10, "default": 0.5, "group": "inner", "axis": "yaw", "term": "kp"},
+    {"index": 6, "id": "ROLL_KI", "type": "float", "min": 0, "max": 5, "default": 0.0, "group": "inner", "axis": "roll", "term": "ki"},
+    {"index": 7, "id": "PITCH_KI", "type": "float", "min": 0, "max": 5, "default": 0.0, "group": "inner", "axis": "pitch", "term": "ki"},
+    {"index": 8, "id": "YAW_KI", "type": "float", "min": 0, "max": 5, "default": 0.0, "group": "inner", "axis": "yaw", "term": "ki"},
+    {"index": 9, "id": "ROLL_KD", "type": "float", "min": 0, "max": 1, "default": 0.04, "group": "inner", "axis": "roll", "term": "kd"},
+    {"index": 10, "id": "PITCH_KD", "type": "float", "min": 0, "max": 1, "default": 0.04, "group": "inner", "axis": "pitch", "term": "kd"},
+    {"index": 11, "id": "YAW_KD", "type": "float", "min": 0, "max": 1, "default": 0.02, "group": "inner", "axis": "yaw", "term": "kd"},
+    {"index": 12, "id": "ALT_KP", "type": "float", "min": 0, "max": 500, "default": 100.0, "group": "alt", "axis": "alt", "term": "kp", "unit": "us_per_m"},
+    {"index": 13, "id": "ALT_KI", "type": "float", "min": 0, "max": 200, "default": 10.0, "group": "alt", "axis": "alt", "term": "ki", "unit": "us_per_m_s"},
+    {"index": 14, "id": "ALT_CORR_MAX", "type": "float", "min": 10, "max": 400, "default": 200.0, "group": "alt", "axis": "alt", "term": "corr_max", "unit": "us"}
+  ],
+  "messages_first_drop": [
+    {"id": 0, "name": "HEARTBEAT", "direction": "fc_to_gcs"},
+    {"id": 20, "name": "PARAM_REQUEST_READ", "direction": "gcs_to_fc"},
+    {"id": 21, "name": "PARAM_REQUEST_LIST", "direction": "gcs_to_fc"},
+    {"id": 22, "name": "PARAM_VALUE", "direction": "fc_to_gcs"},
+    {"id": 23, "name": "PARAM_SET", "direction": "gcs_to_fc"},
+    {"id": 30, "name": "ATTITUDE", "direction": "fc_to_gcs"}
+  ],
+  "messages_later": [
+    "AUTOPILOT_VERSION",
+    "SYS_STATUS",
+    "LOG_ENTRY",
+    "LOG_DATA",
+    "MAV_CMD_PREFLIGHT_STORAGE"
+  ]
+}

@@ -253,9 +253,9 @@ class _TuningScreenState extends State<TuningScreen>
           child: TabBar(
             controller: _tabs,
             onTap: (_) => setState(() {}),
-            labelColor: AppColors.accent,
+            labelColor: AppColors.forest,
             unselectedLabelColor: AppColors.muted,
-            indicatorColor: AppColors.accent,
+            indicatorColor: AppColors.cta,
             indicatorWeight: 2,
             labelStyle: TextStyle(
               fontSize: g20.bodySize,
@@ -304,7 +304,7 @@ class _TuningScreenState extends State<TuningScreen>
                 padding: const EdgeInsets.fromLTRB(8, 4, 8, 2),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                   border: Border.all(color: AppColors.border),
                 ),
                 child: Column(children: _buildSliders()),
@@ -314,7 +314,7 @@ class _TuningScreenState extends State<TuningScreen>
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   visualDensity: VisualDensity.compact,
-                  activeColor: AppColors.accent,
+                  activeColor: AppColors.forest,
                   title: const Text(
                     'Link roll + pitch',
                     style: TextStyle(fontSize: 12),
@@ -374,7 +374,9 @@ class _TuningScreenState extends State<TuningScreen>
                     child: ElevatedButton(
                       style: _compactBtn.copyWith(
                         backgroundColor:
-                            const WidgetStatePropertyAll(AppColors.success),
+                            const WidgetStatePropertyAll(AppColors.cta),
+                        foregroundColor:
+                            const WidgetStatePropertyAll(AppColors.onCta),
                       ),
                       onPressed: (widget.armed || _writing) ? null : _saveToFc,
                       child: const Text('Save to FC'),
@@ -408,17 +410,17 @@ class _TuningScreenState extends State<TuningScreen>
       return ChoiceChip(
         label: Text(label),
         selected: on,
-        selectedColor: AppColors.accent,
+        selectedColor: AppColors.forest,
         backgroundColor: AppColors.surface2,
         visualDensity: VisualDensity.compact,
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        labelStyle: TextStyle(
-          color: on ? Colors.white : AppColors.muted,
-          fontWeight: FontWeight.w600,
+        labelStyle: AppFonts.body(
           fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: on ? Colors.white : AppColors.muted,
         ),
         labelPadding: const EdgeInsets.symmetric(horizontal: 6),
-        side: BorderSide(color: on ? AppColors.accent : AppColors.border),
+        side: BorderSide(color: on ? AppColors.forest : AppColors.border),
         onSelected: (_) => setState(() => _axis = axis),
       );
     }
@@ -599,10 +601,10 @@ class _TuningScreenState extends State<TuningScreen>
           Expanded(
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
-                activeTrackColor: AppColors.accent,
+                activeTrackColor: AppColors.forest.withValues(alpha: 0.45),
                 inactiveTrackColor: AppColors.border,
-                thumbColor: AppColors.accent,
-                overlayColor: AppColors.accent.withValues(alpha: 0.12),
+                thumbColor: AppColors.cta,
+                overlayColor: AppColors.forest.withValues(alpha: 0.12),
                 trackHeight: 2.5,
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
               ),

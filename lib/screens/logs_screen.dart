@@ -424,15 +424,14 @@ class _LogsScreenState extends State<LogsScreen> {
         // ---- Live Log (STATUSTEXT) ----
         Text(
           'Live Log',
-          style: TextStyle(
+          style: AppFonts.display(
             fontSize: g20.titleSize,
             fontWeight: FontWeight.w700,
-            color: AppColors.text,
           ),
         ),
-        const Text(
+        Text(
           'STATUSTEXT +/= stream — not SD flight files',
-          style: TextStyle(fontSize: 10.5, color: AppColors.muted),
+          style: AppFonts.body(fontSize: 10.5, color: AppColors.muted),
         ),
         const SizedBox(height: 6),
         Wrap(
@@ -499,14 +498,14 @@ class _LogsScreenState extends State<LogsScreen> {
         ),
         if (_showGraphs) ...[
           _chartBlock('Attitude °', [
-            _ChartSeries('Roll', AppColors.accent, _rollQ),
-            _ChartSeries('Pitch', Colors.orange, _pitchQ),
-            _ChartSeries('Yaw', Colors.lightBlue, _yawQ),
+            _ChartSeries('Roll', AppColors.forest, _rollQ),
+            _ChartSeries('Pitch', AppColors.chartPitch, _pitchQ),
+            _ChartSeries('Yaw', AppColors.chartYaw, _yawQ),
           ], g20.chartHeight),
           _chartBlock('Gyro dps', [
-            _ChartSeries('gx', const Color(0xFFE57373), _gxQ),
-            _ChartSeries('gy', const Color(0xFF81C784), _gyQ),
-            _ChartSeries('gz', const Color(0xFF64B5F6), _gzQ),
+            _ChartSeries('gx', AppColors.chartGx, _gxQ),
+            _ChartSeries('gy', AppColors.chartGy, _gyQ),
+            _ChartSeries('gz', AppColors.chartGz, _gzQ),
           ], g20.chartHeight),
         ],
         Row(
@@ -544,22 +543,22 @@ class _LogsScreenState extends State<LogsScreen> {
           margin: const EdgeInsets.only(top: 2, bottom: 8),
           padding: const EdgeInsets.all(6),
           decoration: BoxDecoration(
-            color: const Color(0xFF0E1114),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: AppColors.border),
+            color: AppColors.feed,
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+            border: Border.all(color: AppColors.forest),
           ),
           child: !_live
-              ? const Center(
+              ? Center(
                   child: Text(
                     'Connect for Live Log',
-                    style: TextStyle(color: AppColors.muted, fontSize: 12),
+                    style: AppFonts.body(fontSize: 12, color: AppColors.feedText),
                   ),
                 )
               : _lines.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Text(
                         'Waiting for STATUSTEXT…',
-                        style: TextStyle(color: AppColors.muted, fontSize: 12),
+                        style: AppFonts.body(fontSize: 12, color: AppColors.feedText),
                       ),
                     )
                   : ListView.builder(
@@ -571,7 +570,7 @@ class _LogsScreenState extends State<LogsScreen> {
                           fontFamily: 'monospace',
                           fontSize: 10.5,
                           height: 1.35,
-                          color: Color(0xFFB7C0C9),
+                          color: AppColors.feedText,
                         ),
                       ),
                     ),
@@ -626,16 +625,15 @@ class _LogsScreenState extends State<LogsScreen> {
         // ---- SD flight logs ----
         Text(
           'SD flight logs',
-          style: TextStyle(
+          style: AppFonts.display(
             fontSize: g20.titleSize,
             fontWeight: FontWeight.w700,
-            color: AppColors.text,
           ),
         ),
         Text(
           _sdStatus ??
               'On-card arm→disarm CSV over radio (mavsd) — separate from Live Log',
-          style: const TextStyle(fontSize: 10.5, color: AppColors.muted),
+          style: AppFonts.body(fontSize: 10.5, color: AppColors.muted),
         ),
         const SizedBox(height: 8),
         Row(
@@ -683,14 +681,14 @@ class _LogsScreenState extends State<LogsScreen> {
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
             decoration: BoxDecoration(
               color: AppColors.surface,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMd),
               border: Border.all(color: AppColors.border),
             ),
             child: Text(
               !_sdAvailable
                   ? 'Connect (mavsd firmware) to list SD flights.'
                   : 'No flights listed — tap Refresh when disarmed.',
-              style: const TextStyle(fontSize: 12, color: AppColors.muted),
+              style: AppFonts.body(fontSize: 12, color: AppColors.muted),
             ),
           )
         else
@@ -699,22 +697,21 @@ class _LogsScreenState extends State<LogsScreen> {
               margin: const EdgeInsets.only(bottom: 6),
               color: AppColors.surface,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                 side: const BorderSide(color: AppColors.border),
               ),
               child: ListTile(
                 dense: true,
                 title: Text(
                   '#${e.id}  ${e.file}${e.tag != '-' && e.tag.isNotEmpty ? '  (${e.tag})' : ''}',
-                  style: const TextStyle(
+                  style: AppFonts.body(
                     fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.text,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
                 subtitle: Text(
                   'rows ${e.rows} · drops ${e.drops} · ${e.durS}s',
-                  style: const TextStyle(fontSize: 10.5, color: AppColors.muted),
+                  style: AppFonts.body(fontSize: 10.5, color: AppColors.muted),
                 ),
                 trailing: TextButton(
                   onPressed: sdActionsEnabled ? () => _downloadSd(e) : null,
@@ -779,22 +776,28 @@ class _LogsScreenState extends State<LogsScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(7),
+        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
         border: Border.all(color: AppColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.forest.withValues(alpha: 0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Text.rich(
         TextSpan(
           children: [
             TextSpan(
               text: '$label ',
-              style: const TextStyle(fontSize: 10, color: AppColors.muted),
+              style: AppFonts.body(fontSize: 10, color: AppColors.muted),
             ),
             TextSpan(
               text: value,
-              style: const TextStyle(
+              style: AppFonts.body(
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
-                color: AppColors.text,
               ),
             ),
           ],

@@ -194,24 +194,30 @@ class _ConnectScreenState extends State<ConnectScreen> {
       children: [
         Text(
           'Connect to Flight Controller',
-          style: TextStyle(
+          style: AppFonts.display(
             fontSize: g20.compactChrome ? 18 : 22,
-            fontWeight: FontWeight.w600,
-            color: AppColors.text,
+            fontWeight: FontWeight.w700,
           ),
         ),
         const SizedBox(height: 4),
         Text(
           'G20 UDP 14551 → 127.0.0.1:14552  ·  MAVLink v2',
-          style: TextStyle(fontSize: g20.bodySize, color: AppColors.muted),
+          style: AppFonts.body(fontSize: g20.bodySize, color: AppColors.muted),
         ),
         SizedBox(height: g20.compactChrome ? 10 : 18),
         Container(
           padding: EdgeInsets.all(g20.compactChrome ? 10 : 14),
           decoration: BoxDecoration(
             color: AppColors.surface,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
             border: Border.all(color: AppColors.border),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.forest.withValues(alpha: 0.06),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -276,18 +282,34 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 style: ElevatedButton.styleFrom(
                   minimumSize: Size.fromHeight(g20.compactChrome ? 42 : 48),
                   backgroundColor:
-                      widget.connected ? AppColors.danger : AppColors.accent,
+                      widget.connected ? AppColors.danger : AppColors.cta,
+                  foregroundColor:
+                      widget.connected ? Colors.white : AppColors.onCta,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+                  ),
                 ),
                 child: _busy
-                    ? const SizedBox(
+                    ? SizedBox(
                         height: 20,
                         width: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2.4,
-                          color: Colors.white,
+                          color: widget.connected
+                              ? Colors.white
+                              : AppColors.onCta,
                         ),
                       )
-                    : Text(widget.connected ? 'Disconnect' : 'Connect'),
+                    : Text(
+                        widget.connected ? 'Disconnect' : 'Connect',
+                        style: AppFonts.body(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: widget.connected
+                              ? Colors.white
+                              : AppColors.onCta,
+                        ),
+                      ),
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -321,7 +343,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: AppColors.surface,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
             border: Border.all(color: AppColors.border),
           ),
           child: Column(
@@ -345,17 +367,13 @@ class _ConnectScreenState extends State<ConnectScreen> {
               width: 110,
               child: Text(
                 label,
-                style: const TextStyle(color: AppColors.muted, fontSize: 13),
+                style: AppFonts.body(fontSize: 13, color: AppColors.muted),
               ),
             ),
             Expanded(
               child: Text(
                 value,
-                style: const TextStyle(
-                  color: AppColors.text,
-                  fontWeight: FontWeight.w500,
-                  fontSize: 13,
-                ),
+                style: AppFonts.body(fontSize: 13, fontWeight: FontWeight.w600),
               ),
             ),
           ],

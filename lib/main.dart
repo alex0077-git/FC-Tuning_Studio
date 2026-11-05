@@ -14,7 +14,7 @@ class FcTuningStudioApp extends StatelessWidget {
     return MaterialApp(
       title: 'FC Tuning Studio',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark,
+      theme: AppTheme.light,
       builder: (context, child) {
         // G20 bezel is a compact landscape “mini PC” — keep chrome dense.
         return MediaQuery(

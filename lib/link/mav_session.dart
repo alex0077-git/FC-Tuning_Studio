@@ -31,12 +31,24 @@ class MavSession {
   int paramValueSeen = 0;
   int liveLogLinesSeen = 0;
   int sdTunnelBytes = 0;
+  DateTime? lastFcHeartbeatAt;
+
+  /// No FC HEARTBEAT for this long ⇒ treat radio/MAV link as lost.
+  static const linkLostAfter = Duration(seconds: 3);
 
   Stream<MavMessage> get messages => _messages.stream;
   Stream<String> get liveLogLines => _liveLogLines.stream;
   Stream<String> get sdLogLines => _sdLogLines.stream;
   bool get armed => lastHeartbeat?.armed ?? false;
   bool get isConnected => _link != null;
+
+  /// True while the FC is still sending HEARTBEAT (sys 1).
+  bool get linkAlive {
+    if (_link == null) return false;
+    final t = lastFcHeartbeatAt;
+    if (t == null) return false;
+    return DateTime.now().difference(t) < linkLostAfter;
+  }
 
   Stream<Heartbeat> get heartbeats => messages
       .where((m) => m.msgid == msgHeartbeat && m.sysid == mavSysFc)
@@ -65,6 +77,7 @@ class MavSession {
     lastHeartbeat = null;
     lastAttitude = null;
     lastLiveLogLine = null;
+    lastFcHeartbeatAt = null;
     rxBytes = 0;
     parsedFrames = 0;
     paramValueSeen = 0;
@@ -92,6 +105,7 @@ class MavSession {
       final hb = decodeHeartbeat(m.payload);
       if (m.sysid == mavSysFc && hb != null) {
         lastHeartbeat = hb;
+        lastFcHeartbeatAt = DateTime.now();
       }
     } else if (m.msgid == msgAttitude) {
       lastAttitude = decodeAttitude(m.payload);

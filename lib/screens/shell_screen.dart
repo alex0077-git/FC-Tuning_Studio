@@ -21,25 +21,40 @@ class _ShellScreenState extends State<ShellScreen> {
   int _pageIndex = 0;
   final MavSession _session = MavSession();
   StreamSubscription? _hbSub;
+  Timer? _linkWatch;
 
   bool _connected = false;
+  bool _linkAlive = false;
   bool _armed = false;
   String _firmware = '—';
 
   @override
   void dispose() {
     _hbSub?.cancel();
+    _linkWatch?.cancel();
     _session.dispose();
     super.dispose();
   }
 
   void _openConnect() => setState(() => _pageIndex = 0);
 
-  void _listenArmed() {
+  void _listenLink() {
     _hbSub?.cancel();
+    _linkWatch?.cancel();
     _hbSub = _session.heartbeats.listen((hb) {
       if (!mounted) return;
-      if (_armed != hb.armed) setState(() => _armed = hb.armed);
+      setState(() {
+        _armed = hb.armed;
+        _linkAlive = true;
+      });
+    });
+    // Poll so "Link Lost" appears when HEARTBEATs stop (no MAVLink / radio drop).
+    _linkWatch = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!mounted || !_connected) return;
+      final alive = _session.linkAlive;
+      if (alive != _linkAlive) {
+        setState(() => _linkAlive = alive);
+      }
     });
   }
 
@@ -63,16 +78,19 @@ class _ShellScreenState extends State<ShellScreen> {
         }) {
           setState(() {
             _connected = true;
+            _linkAlive = true;
             _armed = armed;
             _firmware = firmware;
             _pageIndex = 1;
           });
-          _listenArmed();
+          _listenLink();
         },
         onDisconnected: () {
           _hbSub?.cancel();
+          _linkWatch?.cancel();
           setState(() {
             _connected = false;
+            _linkAlive = false;
             _armed = false;
             _firmware = '—';
             _pageIndex = 0;
@@ -117,6 +135,7 @@ class _ShellScreenState extends State<ShellScreen> {
           children: [
             _StatusBar(
               connected: _connected,
+              linkAlive: _linkAlive,
               armed: _armed,
               firmware: _firmware,
               compact: g20.compactChrome,
@@ -160,6 +179,7 @@ class _ShellScreenState extends State<ShellScreen> {
 class _StatusBar extends StatelessWidget {
   const _StatusBar({
     required this.connected,
+    required this.linkAlive,
     required this.armed,
     required this.firmware,
     required this.compact,
@@ -167,6 +187,7 @@ class _StatusBar extends StatelessWidget {
   });
 
   final bool connected;
+  final bool linkAlive;
   final bool armed;
   final String firmware;
   final bool compact;
@@ -174,9 +195,25 @@ class _StatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dotColor = connected ? AppColors.success : AppColors.danger;
+    final String status;
+    final Color statusColor;
+    final Color dotColor;
+    if (!connected) {
+      status = 'Disconnected';
+      statusColor = const Color(0xFFFF8A80);
+      dotColor = AppColors.danger;
+    } else if (!linkAlive) {
+      status = 'Link Lost';
+      statusColor = const Color(0xFFFFB74D);
+      dotColor = const Color(0xFFFFB74D);
+    } else {
+      status = 'Connected';
+      statusColor = AppColors.cta;
+      dotColor = AppColors.cta;
+    }
+
     return Material(
-      color: AppColors.surface,
+      color: AppColors.forest,
       child: InkWell(
         onTap: onMenuTap,
         child: Container(
@@ -186,7 +223,7 @@ class _StatusBar extends StatelessWidget {
             vertical: compact ? 4 : 8,
           ),
           decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: AppColors.border, width: 1)),
+            border: Border(bottom: BorderSide(color: AppColors.forest, width: 1)),
           ),
           child: Row(
             children: [
@@ -201,7 +238,7 @@ class _StatusBar extends StatelessWidget {
                 icon: Icon(
                   Icons.menu,
                   size: compact ? 18 : 22,
-                  color: AppColors.text,
+                  color: Colors.white,
                 ),
               ),
               const SizedBox(width: 2),
@@ -212,7 +249,10 @@ class _StatusBar extends StatelessWidget {
                   color: dotColor,
                   shape: BoxShape.circle,
                   boxShadow: [
-                    BoxShadow(color: dotColor.withValues(alpha: 0.55), blurRadius: 5),
+                    BoxShadow(
+                      color: dotColor.withValues(alpha: 0.55),
+                      blurRadius: 5,
+                    ),
                   ],
                 ),
               ),
@@ -220,16 +260,17 @@ class _StatusBar extends StatelessWidget {
               Expanded(
                 child: Text.rich(
                   TextSpan(
-                    style: TextStyle(
+                    style: AppFonts.body(
                       fontSize: compact ? 11 : 12,
-                      color: AppColors.muted,
+                      color: Colors.white70,
                     ),
                     children: [
                       TextSpan(
-                        text: connected ? 'Connected' : 'Disconnected',
-                        style: TextStyle(
-                          color: connected ? AppColors.success : AppColors.danger,
-                          fontWeight: FontWeight.w600,
+                        text: status,
+                        style: AppFonts.body(
+                          fontSize: compact ? 11 : 12,
+                          fontWeight: FontWeight.w700,
+                          color: statusColor,
                         ),
                       ),
                       TextSpan(
@@ -270,14 +311,14 @@ class _LockedPage extends StatelessWidget {
         if (locked)
           Positioned.fill(
             child: ColoredBox(
-              color: const Color(0x99000000),
+              color: AppColors.overlay,
               child: Center(
                 child: Container(
                   margin: const EdgeInsets.symmetric(horizontal: 28),
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
                   decoration: BoxDecoration(
                     color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                     border: Border.all(color: AppColors.border),
                   ),
                   child: Column(
@@ -285,19 +326,18 @@ class _LockedPage extends StatelessWidget {
                     children: [
                       const Icon(Icons.link_off, color: AppColors.muted, size: 22),
                       const SizedBox(height: 8),
-                      const Text(
+                      Text(
                         'FC not connected',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.text,
+                        style: AppFonts.display(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                       const SizedBox(height: 4),
-                      const Text(
+                      Text(
                         'Connect to unlock this page.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 12, color: AppColors.muted),
+                        style: AppFonts.body(fontSize: 12, color: AppColors.muted),
                       ),
                       const SizedBox(height: 10),
                       SizedBox(

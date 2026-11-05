@@ -18,10 +18,10 @@ class Drone3dHost extends StatefulWidget {
   final double yawDeg;
 
   @override
-  State<Drone3dHost> createState() => _Drone3dHostState();
+  State<Drone3dHost> createState() => Drone3dHostState();
 }
 
-class _Drone3dHostState extends State<Drone3dHost> {
+class Drone3dHostState extends State<Drone3dHost> {
   static bool _registered = false;
   static html.IFrameElement? _iframe;
   static const _viewType = 'fc-drone-3d-host';
@@ -57,6 +57,10 @@ class _Drone3dHostState extends State<Drone3dHost> {
       'pitch': widget.pitchDeg,
       'yaw': widget.yawDeg,
     }, '*');
+  }
+
+  void resetCamera() {
+    _iframe?.contentWindow?.postMessage({'type': 'resetCamera'}, '*');
   }
 
   @override

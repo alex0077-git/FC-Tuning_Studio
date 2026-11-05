@@ -33,6 +33,8 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   fl_chart: ^0.69.0
+  flutter_svg: ^2.0.17
+  google_fonts: ^6.2.1
   path_provider: ^2.1.5
   webview_flutter: ^4.10.0
 
@@ -52,12 +54,12 @@ flutter_launcher_icons:
   image_path: "assets/icon/app_icon.png"
   android: true
   ios: false
-  adaptive_icon_background: "#1A1D21"
+  adaptive_icon_background: "#0B3D2E"
   adaptive_icon_foreground: "assets/icon/app_icon.png"
   web:
     generate: true
-    background_color: "#1A1D21"
-    theme_color: "#1A1D21"
+    background_color: "#0B3D2E"
+    theme_color: "#0B3D2E"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -72,6 +74,7 @@ flutter:
   assets:
   - assets/3d/
   - assets/3d/vendor/
+  - assets/3d/flightindicators/
   - assets/params_catalog.json
 
   # To add assets to your application, add an assets section, like this:

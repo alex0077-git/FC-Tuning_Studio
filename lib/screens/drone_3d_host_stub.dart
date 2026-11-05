@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-class Drone3dHost extends StatelessWidget {
+class Drone3dHost extends StatefulWidget {
   const Drone3dHost({
     super.key,
     required this.rollDeg,
@@ -13,14 +13,21 @@ class Drone3dHost extends StatelessWidget {
   final double yawDeg;
 
   @override
+  State<Drone3dHost> createState() => Drone3dHostState();
+}
+
+class Drone3dHostState extends State<Drone3dHost> {
+  void resetCamera() {}
+
+  @override
   Widget build(BuildContext context) {
     return const ColoredBox(
-      color: Color(0xFF1A1D21),
+      color: Color(0xFF222222),
       child: Center(
         child: Text(
-          '3D viewer runs on Chrome for now.\nUse: flutter run -d chrome',
+          '3D viewer runs on Android / Chrome.\nUse a device build for the live model.',
           textAlign: TextAlign.center,
-          style: TextStyle(color: Color(0xFF9AA3AD)),
+          style: TextStyle(color: Color(0xFF9A9A9A)),
         ),
       ),
     );

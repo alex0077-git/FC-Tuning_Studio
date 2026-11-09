@@ -32,6 +32,7 @@ class _View3dScreenState extends State<View3dScreen> {
   StreamSubscription? _attSub;
   StreamSubscription? _hbSub;
   StreamSubscription? _liveSub;
+  StreamSubscription? _starSub;
 
   double _roll = 0;
   double _pitch = 0;
@@ -42,6 +43,15 @@ class _View3dScreenState extends State<View3dScreen> {
   bool _liveFromFc = false;
   bool _armed = false;
   LiveLogFields? _fields;
+
+  /// Cruise / base throttle (µs). Stick or slider — last mover wins.
+  int _cruiseUs = 1250;
+  bool _cruiseDragging = false;
+  bool _altHoldOwns = false;
+  bool _linkAlive = false;
+  String? _cruiseNote;
+  Timer? _cruiseSendTimer;
+  Timer? _linkWatch;
 
   double get _yawLabel {
     var y = _yaw;
@@ -72,9 +82,13 @@ class _View3dScreenState extends State<View3dScreen> {
     _attSub?.cancel();
     _hbSub?.cancel();
     _liveSub?.cancel();
+    _starSub?.cancel();
+    _cruiseSendTimer?.cancel();
+    _linkWatch?.cancel();
     _attSub = null;
     _hbSub = null;
     _liveSub = null;
+    _starSub = null;
     _liveFromFc = session != null;
 
     if (session == null) {
@@ -88,12 +102,34 @@ class _View3dScreenState extends State<View3dScreen> {
           _gz = 0;
           _armed = false;
           _fields = null;
+          _cruiseUs = 1250;
+          _altHoldOwns = false;
+          _linkAlive = false;
+          _cruiseNote = null;
+          _cruiseDragging = false;
         });
       }
       return;
     }
 
     _armed = session.armed;
+    _linkAlive = session.linkAlive;
+    _linkWatch = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!mounted) return;
+      final alive = session.linkAlive;
+      if (alive != _linkAlive) {
+        setState(() {
+          _linkAlive = alive;
+          if (!alive) {
+            _cruiseDragging = false;
+            _cruiseNote = 'Link Lost — cruise idle';
+            _cruiseSendTimer?.cancel();
+          } else if (_cruiseNote == 'Link Lost — cruise idle') {
+            _cruiseNote = null;
+          }
+        });
+      }
+    });
     final last = session.lastAttitude;
     if (last != null) {
       _roll = last.rollDeg;
@@ -109,15 +145,27 @@ class _View3dScreenState extends State<View3dScreen> {
     });
     _liveSub = session.liveLogLines.listen((line) {
       if (!mounted) return;
-      setState(() => _fields = LiveLogFields.parse(line));
+      final f = LiveLogFields.parse(line);
+      setState(() {
+        _fields = f;
+        final act = f.ahAct;
+        _altHoldOwns = act != null && act != 0;
+        if (_altHoldOwns) {
+          _cruiseNote = 'AltHold owns throttle';
+          _cruiseDragging = false;
+          _cruiseSendTimer?.cancel();
+        } else if (_cruiseNote == 'AltHold owns throttle') {
+          _cruiseNote = null;
+        }
+      });
     });
+    _starSub = session.starStatusLines.listen(_onStarStatus);
     _attSub = session.attitudes.listen((a) {
       if (!mounted) return;
       setState(() {
         _roll = a.rollDeg;
         _pitch = a.pitchDeg;
         _yaw = a.yawDeg;
-        // Gyro rates from ATTITUDE (rad/s → dps).
         _gx = a.rollspeed * 180 / math.pi;
         _gy = a.pitchspeed * 180 / math.pi;
         _gz = a.yawspeed * 180 / math.pi;
@@ -125,11 +173,82 @@ class _View3dScreenState extends State<View3dScreen> {
     });
   }
 
+  void _onStarStatus(String line) {
+    if (!mounted) return;
+    final t = line.startsWith('*') ? line.substring(1).trim() : line.trim();
+    if (t == 'base deny althold') {
+      setState(() {
+        _altHoldOwns = true;
+        _cruiseNote = 'AltHold owns throttle';
+        _cruiseDragging = false;
+      });
+      _cruiseSendTimer?.cancel();
+      return;
+    }
+    if (t == 'base deny') {
+      setState(() => _cruiseNote = 'Cruise refused');
+      return;
+    }
+    final m = RegExp(r'^base (\d+)$').firstMatch(t);
+    if (m != null) {
+      final us = MavSession.clampPwmUs(int.parse(m.group(1)!));
+      setState(() {
+        _cruiseUs = us;
+        _cruiseNote = null;
+        if (_cruiseDragging) {
+          // Stick took over while dragging — snap and stop send.
+          _cruiseDragging = false;
+        }
+      });
+      _cruiseSendTimer?.cancel();
+    }
+  }
+
+  Future<void> _sendCruise() async {
+    final s = widget.session;
+    if (s == null || _altHoldOwns || !_linkAlive) return;
+    try {
+      await s.sendCruiseBaseUs(_cruiseUs);
+    } catch (_) {
+      if (mounted) setState(() => _cruiseNote = 'Send failed');
+    }
+  }
+
+  bool get _cruiseFrozen => _altHoldOwns || !_linkAlive;
+
+  void _onCruiseChanged(double v) {
+    if (_cruiseFrozen) return;
+    final us = MavSession.clampPwmUs(v.round());
+    setState(() {
+      _cruiseUs = us;
+      _cruiseNote = null;
+    });
+    unawaited(_sendCruise());
+  }
+
+  void _onCruiseDragStart(double _) {
+    if (_cruiseFrozen) return;
+    _cruiseDragging = true;
+    _cruiseSendTimer?.cancel();
+    _cruiseSendTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      unawaited(_sendCruise());
+    });
+  }
+
+  void _onCruiseDragEnd(double _) {
+    _cruiseDragging = false;
+    _cruiseSendTimer?.cancel();
+    unawaited(_sendCruise());
+  }
+
   @override
   void dispose() {
+    _cruiseSendTimer?.cancel();
+    _linkWatch?.cancel();
     _attSub?.cancel();
     _hbSub?.cancel();
     _liveSub?.cancel();
+    _starSub?.cancel();
     super.dispose();
   }
 
@@ -157,6 +276,15 @@ class _View3dScreenState extends State<View3dScreen> {
       yawLabel: _yawLabel,
     );
 
+    final cruise = _CruiseBar(
+      us: _cruiseUs,
+      frozen: _cruiseFrozen,
+      note: _cruiseNote,
+      onChanged: _onCruiseChanged,
+      onChangeStart: _onCruiseDragStart,
+      onChangeEnd: _onCruiseDragEnd,
+    );
+
     final sidebar = _BfSidebar(
       roll: _roll,
       pitch: _pitch,
@@ -174,7 +302,14 @@ class _View3dScreenState extends State<View3dScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(child: viewport),
+            Expanded(
+              child: Column(
+                children: [
+                  Expanded(child: viewport),
+                  cruise,
+                ],
+              ),
+            ),
             SizedBox(width: sideW, child: sidebar),
           ],
         ),
@@ -186,8 +321,95 @@ class _View3dScreenState extends State<View3dScreen> {
       child: Column(
         children: [
           Expanded(flex: 3, child: viewport),
+          cruise,
           Expanded(flex: 2, child: sidebar),
         ],
+      ),
+    );
+  }
+}
+
+class _CruiseBar extends StatelessWidget {
+  const _CruiseBar({
+    required this.us,
+    required this.frozen,
+    required this.note,
+    required this.onChanged,
+    required this.onChangeStart,
+    required this.onChangeEnd,
+  });
+
+  final int us;
+  final bool frozen;
+  final String? note;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeStart;
+  final ValueChanged<double> onChangeEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: _Bf.panel,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Text(
+                  'Cruise',
+                  style: TextStyle(
+                    color: _Bf.yellow,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  '$us µs',
+                  style: const TextStyle(
+                    color: _Bf.text,
+                    fontSize: 13,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (note != null) ...[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      note!,
+                      style: TextStyle(
+                        color: frozen ? _Bf.yellow : _Bf.bad,
+                        fontSize: 11,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: frozen ? _Bf.muted : _Bf.yellow,
+                inactiveTrackColor: _Bf.muted.withValues(alpha: 0.35),
+                thumbColor: frozen ? _Bf.muted : _Bf.yellow,
+                overlayColor: _Bf.yellow.withValues(alpha: 0.2),
+              ),
+              child: Slider(
+                min: 1000,
+                max: 2000,
+                divisions: 100,
+                value: us.toDouble().clamp(1000, 2000),
+                onChanged: frozen ? null : onChanged,
+                onChangeStart: frozen ? null : onChangeStart,
+                onChangeEnd: frozen ? null : onChangeEnd,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -321,8 +543,7 @@ class _BfSidebar extends StatelessWidget {
                 valueColor: fixColor,
               ),
               _row('Number of Satellites', sats?.toString() ?? '—'),
-              _row('Latitude', '—'),
-              _row('Longitude', '—'),
+              // Lat/Lon not in Phase B Live Log — omit (no fake zeros).
             ],
           ),
         ),
@@ -334,17 +555,19 @@ class _BfSidebar extends StatelessWidget {
               _row('Arming', armed ? 'ARMED' : 'DISARMED',
                   valueColor: armed ? _Bf.bad : _Bf.good),
               _row('Mode', fields?.mode?.toUpperCase() ?? '—'),
-              _row('Battery voltage', '—'),
-              _row('Capacity drawn', '—'),
-              _row('Current draw', '—'),
-              _row('RSSI', '—'),
-              _row('MCU', '—'),
               _row(
                 'Temperature',
                 fields?.tempC != null
                     ? '${fields!.tempC!.toStringAsFixed(1)} °C'
                     : '—',
               ),
+              _row(
+                'Motors µs',
+                fields?.m1 != null
+                    ? '${fields!.m1} ${fields!.m2} ${fields!.m3} ${fields!.m4}'
+                    : '—',
+              ),
+              // Battery / RSSI / MCU not on this Live Log — omit.
             ],
           ),
         ),

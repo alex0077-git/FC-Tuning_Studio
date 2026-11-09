@@ -18,6 +18,8 @@ class MavSession {
   final _messages = StreamController<MavMessage>.broadcast();
   final _liveLogLines = StreamController<String>.broadcast();
   final _sdLogLines = StreamController<String>.broadcast();
+  /// Motor / cruise replies (`*base …`, `*motor …`). Not Live Log or SD.
+  final _starStatus = StreamController<String>.broadcast();
   final Map<String, double> params = {};
   final Map<int, String> idsByIndex = {};
   final Map<int, int> msgidCounts = {};
@@ -39,6 +41,7 @@ class MavSession {
   Stream<MavMessage> get messages => _messages.stream;
   Stream<String> get liveLogLines => _liveLogLines.stream;
   Stream<String> get sdLogLines => _sdLogLines.stream;
+  Stream<String> get starStatusLines => _starStatus.stream;
   bool get armed => lastHeartbeat?.armed ?? false;
   bool get isConnected => _link != null;
 
@@ -127,18 +130,26 @@ class MavSession {
     } else if (m.msgid == msgStatustext) {
       final st = decodeStatusText(m.payload);
       if (st != null) {
-        final line = _liveLogAsm.pushChunk(st.text);
-        if (line != null) {
-          liveLogLinesSeen += 1;
-          lastLiveLogLine = line;
-          if (!_liveLogLines.isClosed) {
-            _liveLogLines.add(line);
+        final t = st.text;
+        // Motor / cruise replies use leading '*'; leave Live Log / SD alone.
+        if (t.isNotEmpty && t.codeUnitAt(0) == 0x2A /* * */) {
+          if (!_starStatus.isClosed) {
+            _starStatus.add(t);
           }
-        }
-        for (final sdLine in _sdAsm.pushChunk(st.text)) {
-          sdTunnelBytes = _sdAsm.bytesSeen;
-          if (!_sdLogLines.isClosed) {
-            _sdLogLines.add(sdLine);
+        } else {
+          final line = _liveLogAsm.pushChunk(t);
+          if (line != null) {
+            liveLogLinesSeen += 1;
+            lastLiveLogLine = line;
+            if (!_liveLogLines.isClosed) {
+              _liveLogLines.add(line);
+            }
+          }
+          for (final sdLine in _sdAsm.pushChunk(t)) {
+            sdTunnelBytes = _sdAsm.bytesSeen;
+            if (!_sdLogLines.isClosed) {
+              _sdLogLines.add(sdLine);
+            }
           }
         }
       }
@@ -152,13 +163,28 @@ class MavSession {
     sdTunnelBytes = 0;
   }
 
-  /// App → FC SD command (STATUSTEXT text = `log list` / `log dump N` / …).
+  /// App → FC SD / motor / cruise command (plain STATUSTEXT text).
   Future<void> sendStatusText(String text) async {
     final g20 = _link;
     if (g20 is G20UdpLink) {
       await g20.waitForPeer(timeout: const Duration(seconds: 2));
     }
     await sendAsync(encoder.statusText(text));
+  }
+
+  /// Cruise / base throttle (µs). Clamp 1000..2000.
+  Future<void> sendCruiseBaseUs(int us) =>
+      sendStatusText('base ${_clampUs(us)}');
+
+  /// Bench motor test: `motor 1..4 N`, `motor all N`, or `motor stop`.
+  Future<void> sendMotorCommand(String cmd) => sendStatusText(cmd);
+
+  static int clampPwmUs(int us) => _clampUs(us);
+
+  static int _clampUs(int us) {
+    if (us < 1000) return 1000;
+    if (us > 2000) return 2000;
+    return us;
   }
 
   void send(List<int> frame) {
@@ -412,5 +438,6 @@ class MavSession {
     await _messages.close();
     await _liveLogLines.close();
     await _sdLogLines.close();
+    await _starStatus.close();
   }
 }

@@ -1,28 +1,29 @@
 # FC Tuning Studio
 
-A Phase B ground app for the Fuselage Session-1 flight controller. Connect over Skydroid G20 (UDP) or T12 (Bluetooth), tune PID gains live, watch Live Log + graphs, pull SD flight CSVs over MAVLink, and stream attitude in 3D. Built as a Flutter app aimed at the G20 bezel.
+A Phase B ground app for the Fuselage Session-1 flight controller. Connect over Skydroid G20 (UDP), tune PID gains live, watch Live Log + graphs, pull SD flight CSVs over MAVLink, bench-test motors, set cruise base throttle, and stream attitude in 3D. Built as a Flutter app aimed at the G20 bezel.
 
 ## Why I built this
 
-QGroundControl is fine for generic MAVLink, but this FC is a custom Phase B stack: compact G20 UI, Live Log on STATUSTEXT, SD card dumps on a separate tunnel, and param writes that must refuse while armed. I wanted one Tuning Studio that speaks that contract honestly: same radio path for telemetry, tuning, live status, and flight-log download, without treating Live Log lines as SD CSV or inventing data the FC never sent.
+QGroundControl is fine for generic MAVLink, but this FC is a custom Phase B stack: compact G20 UI, Live Log on STATUSTEXT, SD card dumps on a separate tunnel, and param writes that must refuse while armed. I wanted one Tuning Studio that speaks that contract honestly: same radio path for telemetry, tuning, live status, motor/cruise commands, and flight-log download, without treating Live Log lines as SD CSV or inventing data the FC never sent.
 
 ## Features
 
-- **Connect**: Skydroid G20 UDP (listen `14551` → bridge `127.0.0.1:14552`) and T12 classic BT SPP. Waits for FC HEARTBEAT (sys/comp **1/1**), downloads the Phase B param catalog, shows link health.
-- **Link state**: **Connected** while FC HEARTBEATs arrive; **Link Lost** after ~3 s of silence (radio drop or non-MAVLink flash); **Disconnected** when the socket is closed.
-- **Tuning**: Outer / Inner / AltHold tabs, roll-pitch link, Write only when **disarmed** (FC echoes PARAM_VALUE). Compact chrome for G20 landscape.
-- **Live Log**: Reassembles STATUSTEXT into full `[DMA]…` lines. Highlight chips for attitude, baro, alt-hold, motors, GPS, and counters. Optional live attitude/gyro graphs.
-- **Off-tab persistence**: IndexedStack keeps Tuning / Logs / 3D alive, so the feed and graphs keep filling while you're on another tab.
-- **SD flight logs**: Disarmed `log list` / `log dump N` / `log wipe` over STATUSTEXT; tunnel reassembly; saves FC CSV as-is to Downloads (`FC_Tuning`). Needs **mavsd** firmware.
-- **3D**: Live ATTITUDE only (`quad_x.gltf`). Orbit / zoom / pan. Horizon + heading gauges and gyro **gx/gy/gz** (dps). GPS / System show real Live Log values or **—**, with no mock motion and no fake zeros.
+- **Connect** — G20 UDP only in this build (listen `14551` → bridge `127.0.0.1:14552`). Waits for FC HEARTBEAT (sys/comp **1/1**), downloads the Phase B param catalog, shows link health. T12 BT is not enabled here.
+- **Link state** — **Connected** while FC HEARTBEATs arrive; **Link Lost** after ~3 s of silence; **Disconnected** when the socket is closed.
+- **Reset** — Status-bar **Reset** (right) sends STATUSTEXT `reset` when **disarmed**. Expect `*reset` or `*reset deny armed`. Link drops briefly on a real reboot; RAM params return to firmware defaults.
+- **Navigation** — ☰ left drawer (no bottom bar): Connect, Tuning, Logs, 3D, Motor. Full height under the status strip.
+- **Tuning** — Outer / Inner / AltHold tabs, roll–pitch link, Write only when **disarmed** (FC echoes PARAM_VALUE).
+- **Live Log** — Reassembles STATUSTEXT `+` / `=` into full `[DMA]…` lines. Chips + optional attitude/gyro graphs. Off-tab persistence via IndexedStack.
+- **SD flight logs** — Disarmed `log list` / `log dump N` / `log wipe`; `#` / `$` tunnel; one-tap save as **`.csv`** into public **Downloads/FC_Tuning** (MediaStore). Needs firmware with SD-over-MAV.
+- **Motor** — Bench page: one motor (or All) at a time, hold-to-test, STATUSTEXT `motor …` / `motor stop`. Disarmed + link alive only. Props off.
+- **3D** — `quad_x.gltf` from live ATTITUDE; orbit / zoom / pan; horizon, heading, gyro gx/gy/gz; **Cruise** slider (`base N`); **Height** from Live Log `Z` (2 decimals) on the view and sidebar. GPS/System: real fields or **—**.
 
 ## Tech Stack
 
 - Flutter / Dart
 - Custom MAVLink v2 codec (HEARTBEAT, PARAM_*, ATTITUDE, STATUSTEXT)
-- G20 UDP link + Android Kotlin bridge (`G20UdpBridge`)
-- T12 Bluetooth SPP link
-- `fl_chart` (live graphs), `webview_flutter` + Three.js (3D scene), `path_provider` (CSV export)
+- G20 UDP + Android Kotlin (`G20UdpBridge`, `DownloadsBridge`)
+- `fl_chart`, `webview_flutter` + Three.js, `path_provider`
 
 ## Project Structure
 
@@ -33,7 +34,8 @@ fc_tuning_studio/
 │       ├── AndroidManifest.xml
 │       └── kotlin/com/example/fc_tuning_studio/
 │           ├── MainActivity.kt
-│           └── G20UdpBridge.kt
+│           ├── G20UdpBridge.kt
+│           └── DownloadsBridge.kt
 ├── assets/
 │   ├── params_catalog.json
 │   ├── icon/
@@ -59,6 +61,7 @@ fc_tuning_studio/
 │   ├── logs/
 │   │   ├── live_log_assembler.dart
 │   │   ├── flight_log_store.dart
+│   │   ├── public_downloads.dart
 │   │   ├── sd_cli_transport.dart
 │   │   ├── byte_cli_transport.dart
 │   │   ├── mav_sd_cli_transport.dart
@@ -75,6 +78,7 @@ fc_tuning_studio/
 │   │   ├── tuning_screen.dart
 │   │   ├── logs_screen.dart
 │   │   ├── view3d_screen.dart
+│   │   ├── motor_screen.dart
 │   │   └── drone_3d_host*.dart
 │   ├── theme/
 │   │   └── app_theme.dart
@@ -90,19 +94,20 @@ fc_tuning_studio/
 
 ## How It Works
 
-1. **Link** → Connect opens the radio path. GCS HEARTBEAT keeps the G20 bridge awake; FC HEARTBEAT confirms the Session-1 stack on PB6/PB7 @ 115200. `MavSession.linkAlive` tracks the last FC HEARTBEAT; the shell shows **Link Lost** when it goes stale (~3 s).
-2. **Params** → PARAM_REQUEST_LIST / READ fills Tuning. PARAM_SET is blocked in-app (and on FC) while armed.
-3. **Live Log** → Status lines arrive as STATUSTEXT chunks marked `+` (more) / `=` (end). The app joins them, updates chips/graphs, and can save a **live session** (not a flight CSV).
-4. **SD download** → App sends STATUSTEXT `log list` / `log dump N`. FC replies on `#` / `$` until `LOG END`. Payload is the same CSV as USB `log dump`. Needs **mavsd** firmware.
-5. **3D** → ATTITUDE drives the craft and gyro rates. GLTF is injected into the WebView HTML (Android `file://` cannot XHR the asset). OrbitControls owns the camera. Leave the tab and come back, and the session stays up via the shell IndexedStack.
+1. **Link** — Connect opens G20 UDP. GCS HEARTBEAT keeps the bridge awake; FC HEARTBEAT (PB6/PB7 @ 115200) confirms Session-1. `linkAlive` ages out → **Link Lost**.
+2. **Params** — PARAM_REQUEST_LIST / READ fill Tuning; PARAM_SET blocked while armed. Values are RAM until reboot.
+3. **Live Log** — `+` / `=` chunks → full lines → chips/graphs. Optional live-session `.txt` (not a flight CSV).
+4. **SD download** — `log list` / `log dump N`; `#` / `$` until `LOG END`; CSV copied to **Files → Downloads → FC_Tuning**.
+5. **Motor / Cruise / Reset** — Plain STATUSTEXT (`motor …`, `base N`, `reset`). Replies use `*` so Live Log / SD ignore them.
+6. **3D** — ATTITUDE + gyro; GLTF injected into WebView; OrbitControls for camera; Height from Live Log `Z` (filtered baro relative height).
 
 ## Setup
 
 ### Prerequisites
 
 - Flutter SDK (see `pubspec.yaml`, SDK `^3.12.2`)
-- Android device or Skydroid G20 for radio work
-- FC flashed with Phase B MAVLink (+ **mavsd** hex for SD-over-MAV)
+- Skydroid G20 (or Android) for radio work
+- Phase B MAVLink firmware (+ SD-over-MAV for radio CSV download)
 
 ### Run
 

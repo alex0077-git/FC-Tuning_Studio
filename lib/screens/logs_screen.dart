@@ -233,9 +233,9 @@ class _LogsScreenState extends State<LogsScreen> {
     });
     try {
       final out = await _liveStore.exportToDownloads(log);
-      await Clipboard.setData(ClipboardData(text: out.path));
+      await Clipboard.setData(ClipboardData(text: out));
       if (!mounted) return;
-      _toast('Live session → ${out.path}');
+      _toast('Live session → $out');
     } catch (e) {
       _toast('Download failed: $e');
     } finally {
@@ -312,13 +312,14 @@ class _LogsScreenState extends State<LogsScreen> {
         csvBody: r.csvBody!,
       );
       final out = await _sdStore.exportToDownloads(file);
-      await Clipboard.setData(ClipboardData(text: out.path));
+      await Clipboard.setData(ClipboardData(text: out));
       if (!mounted) return;
+      final leaf = out.contains('/') ? out.split('/').last : out;
       setState(() {
         _sdBusy = false;
-        _sdStatus = 'Saved ${out.uri.pathSegments.last}';
+        _sdStatus = 'Saved $leaf in Downloads/FC_Tuning';
       });
-      _toast('Flight CSV → ${out.path}');
+      _toast('Flight CSV → $out (Files → Downloads → FC_Tuning)');
     } catch (err) {
       setState(() {
         _sdBusy = false;

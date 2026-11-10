@@ -1,6 +1,9 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
+
+import 'public_downloads.dart';
 
 class SavedFlightLog {
   const SavedFlightLog({
@@ -116,32 +119,10 @@ class FlightLogStore {
     }
   }
 
-  /// One-click export into Download/FC_Tuning when writable.
-  Future<File> exportToDownloads(SavedFlightLog log) async {
-    Directory? dest;
-    final candidates = <String>[
-      '/storage/emulated/0/Download/FC_Tuning',
-      '/sdcard/Download/FC_Tuning',
-    ];
-    for (final path in candidates) {
-      try {
-        final d = Directory(path);
-        if (!await d.exists()) {
-          await d.create(recursive: true);
-        }
-        final probe = File('${d.path}/.fc_write_probe');
-        await probe.writeAsString('ok');
-        await probe.delete();
-        dest = d;
-        break;
-      } catch (_) {
-        continue;
-      }
-    }
-    dest ??= await _dir();
-    final out = File('${dest.path}/${log.name}');
-    await log.file.copy(out.path);
-    return out;
+  /// One-click export into public Download/FC_Tuning (Files app visible).
+  Future<String> exportToDownloads(SavedFlightLog log) async {
+    final bytes = Uint8List.fromList(await log.file.readAsBytes());
+    return PublicDownloads.saveFile(fileName: log.name, bytes: bytes);
   }
 
   /// Export every saved flight file into Download/FC_Tuning in one click.

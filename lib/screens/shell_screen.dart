@@ -24,7 +24,9 @@ class _ShellScreenState extends State<ShellScreen> {
   final MavSession _session = MavSession();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   StreamSubscription? _hbSub;
+  StreamSubscription? _starSub;
   Timer? _linkWatch;
+  bool _resetBusy = false;
 
   bool _connected = false;
   bool _linkAlive = false;
@@ -34,6 +36,7 @@ class _ShellScreenState extends State<ShellScreen> {
   @override
   void dispose() {
     _hbSub?.cancel();
+    _starSub?.cancel();
     _linkWatch?.cancel();
     _session.dispose();
     super.dispose();
@@ -53,6 +56,7 @@ class _ShellScreenState extends State<ShellScreen> {
 
   void _listenLink() {
     _hbSub?.cancel();
+    _starSub?.cancel();
     _linkWatch?.cancel();
     _hbSub = _session.heartbeats.listen((hb) {
       if (!mounted) return;
@@ -61,6 +65,7 @@ class _ShellScreenState extends State<ShellScreen> {
         _linkAlive = true;
       });
     });
+    _starSub = _session.starStatusLines.listen(_onStarStatus);
     _linkWatch = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (!mounted || !_connected) return;
       final alive = _session.linkAlive;
@@ -68,6 +73,59 @@ class _ShellScreenState extends State<ShellScreen> {
         setState(() => _linkAlive = alive);
       }
     });
+  }
+
+  void _onStarStatus(String line) {
+    if (!mounted) return;
+    final t = line.startsWith('*') ? line.substring(1).trim() : line.trim();
+    if (t == 'reset') {
+      setState(() => _resetBusy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('FC resetting… wait for HEARTBEAT')),
+      );
+      return;
+    }
+    if (t == 'reset deny armed') {
+      setState(() => _resetBusy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reset denied — disarm first')),
+      );
+    }
+  }
+
+  Future<void> _confirmReset() async {
+    if (!_connected || !_linkAlive || _armed || _resetBusy) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reboot FC?'),
+        content: const Text(
+          'Sends STATUSTEXT “reset”. Craft must be disarmed. '
+          'Link drops briefly; RAM params return to firmware defaults.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _resetBusy = true);
+    try {
+      await _session.sendReset();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _resetBusy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reset send failed: $e')),
+      );
+    }
   }
 
   @override
@@ -97,12 +155,14 @@ class _ShellScreenState extends State<ShellScreen> {
         },
         onDisconnected: () {
           _hbSub?.cancel();
+          _starSub?.cancel();
           _linkWatch?.cancel();
           setState(() {
             _connected = false;
             _linkAlive = false;
             _armed = false;
             _firmware = '—';
+            _resetBusy = false;
             _pageIndex = 0;
           });
         },
@@ -164,8 +224,10 @@ class _ShellScreenState extends State<ShellScreen> {
               armed: _armed,
               firmware: _firmware,
               compact: g20.compactChrome,
+              resetBusy: _resetBusy,
               onMenuTap: _openDrawer,
               onStatusTap: _openConnect,
+              onResetTap: _confirmReset,
             ),
             Expanded(
               child: IndexedStack(
@@ -299,8 +361,10 @@ class _StatusBar extends StatelessWidget {
     required this.armed,
     required this.firmware,
     required this.compact,
+    required this.resetBusy,
     required this.onMenuTap,
     required this.onStatusTap,
+    required this.onResetTap,
   });
 
   final bool connected;
@@ -308,8 +372,10 @@ class _StatusBar extends StatelessWidget {
   final bool armed;
   final String firmware;
   final bool compact;
+  final bool resetBusy;
   final VoidCallback onMenuTap;
   final VoidCallback onStatusTap;
+  final VoidCallback onResetTap;
 
   @override
   Widget build(BuildContext context) {
@@ -329,6 +395,9 @@ class _StatusBar extends StatelessWidget {
       statusColor = AppColors.cta;
       dotColor = AppColors.cta;
     }
+
+    // Contract: Reset only while connected, link alive, and disarmed.
+    final canReset = connected && linkAlive && !armed && !resetBusy;
 
     return Material(
       color: AppColors.forest,
@@ -405,6 +474,36 @@ class _StatusBar extends StatelessWidget {
                     ),
                   ],
                 ),
+              ),
+            ),
+            SizedBox(
+              height: compact ? 30 : 34,
+              child: TextButton(
+                onPressed: canReset ? onResetTap : null,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.cta,
+                  disabledForegroundColor: Colors.white38,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: resetBusy
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.cta,
+                        ),
+                      )
+                    : Text(
+                        'Reset',
+                        style: AppFonts.body(
+                          fontSize: compact ? 12 : 13,
+                          fontWeight: FontWeight.w700,
+                          color: canReset ? AppColors.cta : Colors.white38,
+                        ),
+                      ),
               ),
             ),
           ],

@@ -179,6 +179,9 @@ class MavSession {
   /// Bench motor test: `motor 1..4 N`, `motor all N`, or `motor stop`.
   Future<void> sendMotorCommand(String cmd) => sendStatusText(cmd);
 
+  /// Soft reboot request (STATUSTEXT `reset`). Disarmed only on FC.
+  Future<void> sendReset() => sendStatusText('reset');
+
   static int clampPwmUs(int us) => _clampUs(us);
 
   static int _clampUs(int us) {

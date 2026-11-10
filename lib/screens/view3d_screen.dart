@@ -269,11 +269,16 @@ class _View3dScreenState extends State<View3dScreen> {
       );
     }
 
+    final heightLabel = _fields?.zM != null
+        ? '${_fields!.zM!.toStringAsFixed(2)} m'
+        : '—';
+
     final viewport = _BfViewport(
       roll: _roll,
       pitch: _pitch,
       yaw: _yaw,
       yawLabel: _yawLabel,
+      heightLabel: heightLabel,
     );
 
     final cruise = _CruiseBar(
@@ -294,6 +299,7 @@ class _View3dScreenState extends State<View3dScreen> {
       gz: _gz,
       armed: _armed,
       fields: _fields,
+      heightLabel: heightLabel,
     );
 
     if (g20.landscape) {
@@ -421,12 +427,14 @@ class _BfViewport extends StatelessWidget {
     required this.pitch,
     required this.yaw,
     required this.yawLabel,
+    required this.heightLabel,
   });
 
   final double roll;
   final double pitch;
   final double yaw;
   final double yawLabel;
+  final String heightLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -458,6 +466,7 @@ class _BfViewport extends StatelessWidget {
                 Text('Yaw: ${yawLabel.toStringAsFixed(0)} deg'),
                 Text('Pitch: ${pitch.toStringAsFixed(1)} deg'),
                 Text('Roll: ${roll.toStringAsFixed(1)} deg'),
+                Text('Height: $heightLabel'),
               ],
             ),
           ),
@@ -477,6 +486,7 @@ class _BfSidebar extends StatelessWidget {
     required this.gz,
     required this.armed,
     required this.fields,
+    required this.heightLabel,
   });
 
   final double roll;
@@ -487,6 +497,7 @@ class _BfSidebar extends StatelessWidget {
   final double gz;
   final bool armed;
   final LiveLogFields? fields;
+  final String heightLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -555,6 +566,7 @@ class _BfSidebar extends StatelessWidget {
               _row('Arming', armed ? 'ARMED' : 'DISARMED',
                   valueColor: armed ? _Bf.bad : _Bf.good),
               _row('Mode', fields?.mode?.toUpperCase() ?? '—'),
+              _row('Height', heightLabel),
               _row(
                 'Temperature',
                 fields?.tempC != null

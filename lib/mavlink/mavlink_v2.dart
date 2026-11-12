@@ -7,6 +7,7 @@ const int mavSysFc = 1;
 const int mavCompFc = 1;
 
 const int msgHeartbeat = 0;
+const int msgSysStatus = 1;
 const int msgParamRequestRead = 20;
 const int msgParamRequestList = 21;
 const int msgParamValue = 22;
@@ -15,6 +16,7 @@ const int msgAttitude = 30;
 const int msgStatustext = 253;
 
 const int crcHeartbeat = 50;
+const int crcSysStatus = 124;
 const int crcParamRequestRead = 214;
 const int crcParamRequestList = 159;
 const int crcParamValue = 220;
@@ -28,6 +30,7 @@ const int mavSeverityInfo = 6;
 
 int crcExtraFor(int msgid) => switch (msgid) {
       msgHeartbeat => crcHeartbeat,
+      msgSysStatus => crcSysStatus,
       msgParamRequestRead => crcParamRequestRead,
       msgParamRequestList => crcParamRequestList,
       msgParamValue => crcParamValue,
@@ -196,6 +199,49 @@ Attitude? decodeAttitude(Uint8List p) {
     rollspeed: _f32(p, 16),
     pitchspeed: _f32(p, 20),
     yawspeed: _f32(p, 24),
+  );
+}
+
+/// MAVLink SYS_STATUS (1) — battery fields (bridge §18 / Current Firmware).
+class SysStatus {
+  SysStatus({
+    required this.voltageBatteryMv,
+    required this.currentBatteryCdegA,
+    required this.batteryRemaining,
+  });
+
+  /// Raw mV. `65535` = no reading.
+  final int voltageBatteryMv;
+
+  /// Always `-1` on this FC — do not show amps.
+  final int currentBatteryCdegA;
+
+  /// 0..100, or `-1` = no reading.
+  final int batteryRemaining;
+
+  static const int noVoltageMv = 65535;
+
+  bool get hasVoltage =>
+      voltageBatteryMv != noVoltageMv && voltageBatteryMv > 0;
+
+  bool get hasPercent => batteryRemaining >= 0 && batteryRemaining <= 100;
+
+  double get voltageVolts => voltageBatteryMv / 1000.0;
+
+  /// Bridge widget: unknown → "no battery"; else "16.20V  74%".
+  String get batteryWidgetText {
+    if (!hasVoltage || !hasPercent) return 'no battery';
+    return '${voltageVolts.toStringAsFixed(2)}V  $batteryRemaining%';
+  }
+}
+
+/// Payload must be 31 bytes (not trimmed). Little-endian offsets.
+SysStatus? decodeSysStatus(Uint8List p) {
+  if (p.length < 31) return null;
+  return SysStatus(
+    voltageBatteryMv: _u16(p, 14),
+    currentBatteryCdegA: _i16(p, 16),
+    batteryRemaining: _i8(p, 30),
   );
 }
 
@@ -476,6 +522,16 @@ class MavlinkV2Encoder {
 int _u16(Uint8List p, int o) => p[o] | (p[o + 1] << 8);
 int _u32(Uint8List p, int o) =>
     p[o] | (p[o + 1] << 8) | (p[o + 2] << 16) | (p[o + 3] << 24);
+int _i16(Uint8List p, int o) {
+  final u = _u16(p, o);
+  return u > 32767 ? u - 65536 : u;
+}
+
+int _i8(Uint8List p, int o) {
+  final u = p[o];
+  return u > 127 ? u - 256 : u;
+}
+
 double _f32(Uint8List p, int o) =>
     ByteData.sublistView(p, o, o + 4).getFloat32(0, Endian.little);
 

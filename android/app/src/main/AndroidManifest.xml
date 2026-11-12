@@ -39,5 +39,9 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Needed so flutter_tts can find the system TTS engine on Android 11+. -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
     </queries>
 </manifest>

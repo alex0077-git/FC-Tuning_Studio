@@ -37,6 +37,8 @@ dependencies:
   google_fonts: ^6.2.1
   path_provider: ^2.1.5
   webview_flutter: ^4.10.0
+  flutter_tts: ^4.2.5
+  audioplayers: ^6.1.0
 
 dev_dependencies:
   flutter_test:
@@ -76,6 +78,13 @@ flutter:
   - assets/3d/vendor/
   - assets/3d/flightindicators/
   - assets/params_catalog.json
+  - assets/sounds/armed.mp3
+  - assets/sounds/disarmed.mp3
+  - assets/sounds/battery_first_warning.mp3
+  - assets/sounds/battery_second_warning.mp3
+  - assets/sounds/althold_on.mp3
+  - assets/sounds/althold_off.mp3
+  - assets/sounds/reset.mp3
 
   # To add assets to your application, add an assets section, like this:
   # assets:

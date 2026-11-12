@@ -4,12 +4,19 @@ import 'package:flutter/material.dart';
 
 import '../layout/g20_metrics.dart';
 import '../link/mav_session.dart';
+import '../logs/live_log_assembler.dart';
+import '../mavlink/mavlink_v2.dart';
 import '../theme/app_theme.dart';
+import '../voice/fc_voice.dart';
 import 'connect_screen.dart';
 import 'logs_screen.dart';
 import 'motor_screen.dart';
 import 'tuning_screen.dart';
 import 'view3d_screen.dart';
+
+/// Firmware 4S resting curve: first caution / must-land (bridge §18).
+const double kBattWarnV = 15.20;
+const double kBattCriticalV = 14.20;
 
 class ShellScreen extends StatefulWidget {
   const ShellScreen({super.key});
@@ -22,22 +29,37 @@ class _ShellScreenState extends State<ShellScreen> {
   /// 0 Connect · 1 Tuning · 2 Logs · 3 3D · 4 Motor
   int _pageIndex = 0;
   final MavSession _session = MavSession();
+  final FcVoice _voice = FcVoice();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   StreamSubscription? _hbSub;
   StreamSubscription? _starSub;
+  StreamSubscription? _liveSub;
+  StreamSubscription? _battSub;
   Timer? _linkWatch;
   bool _resetBusy = false;
 
   bool _connected = false;
   bool _linkAlive = false;
   bool _armed = false;
+  bool _altHoldActive = false;
+  SysStatus? _battery;
   String _firmware = '—';
+
+  /// After OK/close on 15.20 V, don't spam until voltage recovers above warn.
+  bool _warn1Acked = false;
+  bool _warn1Open = false;
+  /// 14.20 V overlay — cannot dismiss until voltage rises.
+  bool _criticalLock = false;
+  double? _lastVolts;
 
   @override
   void dispose() {
     _hbSub?.cancel();
     _starSub?.cancel();
+    _liveSub?.cancel();
+    _battSub?.cancel();
     _linkWatch?.cancel();
+    unawaited(_voice.dispose());
     _session.dispose();
     super.dispose();
   }
@@ -54,23 +76,148 @@ class _ShellScreenState extends State<ShellScreen> {
     setState(() => _pageIndex = index);
   }
 
+  void _clearBatteryWarns() {
+    _warn1Acked = false;
+    _warn1Open = false;
+    _criticalLock = false;
+    _lastVolts = null;
+  }
+
+  void _onBattery(SysStatus s) {
+    if (!mounted) return;
+    setState(() => _battery = s);
+    if (!s.hasVoltage) return;
+    final v = s.voltageVolts;
+    _lastVolts = v;
+
+    if (v <= kBattCriticalV) {
+      if (_warn1Open) {
+        Navigator.of(context, rootNavigator: true).pop();
+        _warn1Open = false;
+      }
+      if (!_criticalLock) {
+        setState(() => _criticalLock = true);
+        unawaited(_voice.sayBatterySecondWarning());
+      }
+      return;
+    }
+
+    if (_criticalLock) {
+      setState(() => _criticalLock = false);
+    }
+
+    if (v > kBattWarnV) {
+      _warn1Acked = false;
+      return;
+    }
+
+    if (!_warn1Acked && !_warn1Open && !_criticalLock) {
+      _showWarn1(v);
+    }
+  }
+
+  Future<void> _showWarn1(double volts) async {
+    _warn1Open = true;
+    unawaited(_voice.sayBatteryFirstWarning());
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        var checked = false;
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('Battery warning'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${volts.toStringAsFixed(2)} V  — first warning (${kBattWarnV.toStringAsFixed(2)} V).\n'
+                    'Plan to land soon. You may continue.',
+                  ),
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: checked,
+                    onChanged: (v) => setLocal(() => checked = v ?? false),
+                    title: const Text('I understand — continue'),
+                    controlAffinity: ListTileControlAffinity.leading,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Close'),
+                ),
+                ElevatedButton(
+                  onPressed: checked ? () => Navigator.pop(ctx) : null,
+                  child: const Text('OK'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (!mounted) return;
+    _warn1Open = false;
+    _warn1Acked = true;
+  }
+
   void _listenLink() {
     _hbSub?.cancel();
     _starSub?.cancel();
+    _liveSub?.cancel();
+    _battSub?.cancel();
     _linkWatch?.cancel();
+    _battery = _session.lastSysStatus;
     _hbSub = _session.heartbeats.listen((hb) {
       if (!mounted) return;
+      final wasArmed = _armed;
       setState(() {
         _armed = hb.armed;
         _linkAlive = true;
       });
+      if (!wasArmed && hb.armed) {
+        unawaited(_voice.sayArmed());
+      } else if (wasArmed && !hb.armed) {
+        unawaited(_voice.sayDisarmed());
+      }
     });
     _starSub = _session.starStatusLines.listen(_onStarStatus);
+    _liveSub = _session.liveLogLines.listen((line) {
+      if (!mounted) return;
+      final act = LiveLogFields.parse(line).ahAct;
+      final on = act != null && act != 0;
+      if (on != _altHoldActive) {
+        final becameOn = on && !_altHoldActive;
+        final becameOff = !on && _altHoldActive;
+        setState(() => _altHoldActive = on);
+        if (becameOn) {
+          unawaited(_voice.sayAltHoldOn());
+        } else if (becameOff) {
+          unawaited(_voice.sayAltHoldOff());
+        }
+      }
+    });
+    _battSub = _session.sysStatuses.listen(_onBattery);
+    if (_battery != null) {
+      _onBattery(_battery!);
+    }
     _linkWatch = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (!mounted || !_connected) return;
       final alive = _session.linkAlive;
       if (alive != _linkAlive) {
-        setState(() => _linkAlive = alive);
+        setState(() {
+          _linkAlive = alive;
+          if (!alive) {
+            _altHoldActive = false;
+            _battery = null;
+          }
+        });
       }
     });
   }
@@ -80,6 +227,7 @@ class _ShellScreenState extends State<ShellScreen> {
     final t = line.startsWith('*') ? line.substring(1).trim() : line.trim();
     if (t == 'reset') {
       setState(() => _resetBusy = false);
+      unawaited(_voice.sayReset());
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('FC resetting… wait for HEARTBEAT')),
       );
@@ -137,6 +285,11 @@ class _ShellScreenState extends State<ShellScreen> {
         key: const ValueKey('connect'),
         session: _session,
         connected: _connected,
+        voiceEnabled: _voice.enabled,
+        onVoiceEnabledChanged: (on) {
+          setState(() => _voice.enabled = on);
+          unawaited(_voice.setEnabled(on));
+        },
         onConnected: ({
           required firmware,
           required boardId,
@@ -144,6 +297,8 @@ class _ShellScreenState extends State<ShellScreen> {
           required linkQualityPercent,
           required armed,
         }) {
+          final becameArmed = !_armed && armed;
+          final becameDisarmed = _armed && !armed;
           setState(() {
             _connected = true;
             _linkAlive = true;
@@ -152,18 +307,29 @@ class _ShellScreenState extends State<ShellScreen> {
             _pageIndex = 1;
           });
           _listenLink();
+          unawaited(_voice.init());
+          if (becameArmed) {
+            unawaited(_voice.sayArmed());
+          } else if (becameDisarmed) {
+            unawaited(_voice.sayDisarmed());
+          }
         },
         onDisconnected: () {
           _hbSub?.cancel();
           _starSub?.cancel();
+          _liveSub?.cancel();
+          _battSub?.cancel();
           _linkWatch?.cancel();
           setState(() {
             _connected = false;
             _linkAlive = false;
             _armed = false;
+            _altHoldActive = false;
+            _battery = null;
             _firmware = '—';
             _resetBusy = false;
             _pageIndex = 0;
+            _clearBatteryWarns();
           });
         },
       ),
@@ -207,35 +373,94 @@ class _ShellScreenState extends State<ShellScreen> {
       ),
     ];
 
-    return Scaffold(
-      key: _scaffoldKey,
-      drawer: _NavDrawer(
-        selectedIndex: _pageIndex,
-        connected: _connected,
-        onSelect: _goPage,
-        onConnect: _openConnect,
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _StatusBar(
-              connected: _connected,
-              linkAlive: _linkAlive,
-              armed: _armed,
-              firmware: _firmware,
-              compact: g20.compactChrome,
-              resetBusy: _resetBusy,
-              onMenuTap: _openDrawer,
-              onStatusTap: _openConnect,
-              onResetTap: _confirmReset,
-            ),
-            Expanded(
-              child: IndexedStack(
-                index: _pageIndex,
-                children: pages,
+    return PopScope(
+      canPop: !_criticalLock,
+      child: Scaffold(
+        key: _scaffoldKey,
+        drawer: _criticalLock
+            ? null
+            : _NavDrawer(
+                selectedIndex: _pageIndex,
+                connected: _connected,
+                onSelect: _goPage,
+                onConnect: _openConnect,
               ),
-            ),
-          ],
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  _StatusBar(
+                    connected: _connected,
+                    linkAlive: _linkAlive,
+                    armed: _armed,
+                    altHoldActive: _altHoldActive,
+                    battery: _battery,
+                    firmware: _firmware,
+                    compact: g20.compactChrome,
+                    resetBusy: _resetBusy,
+                    onMenuTap: _openDrawer,
+                    onStatusTap: _openConnect,
+                    onResetTap: _confirmReset,
+                  ),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _pageIndex,
+                      children: pages,
+                    ),
+                  ),
+                ],
+              ),
+              if (_criticalLock)
+                const Positioned.fill(child: _CriticalBatteryLock()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CriticalBatteryLock extends StatelessWidget {
+  const _CriticalBatteryLock();
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xE6000000),
+      child: Center(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 24),
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+            border: Border.all(color: AppColors.danger, width: 2),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.battery_alert, color: AppColors.danger, size: 36),
+              const SizedBox(height: 10),
+              Text(
+                'LAND NOW',
+                style: AppFonts.display(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.danger,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Battery ≤ ${kBattCriticalV.toStringAsFixed(2)} V.\n'
+                'This screen stays until voltage rises.\n\n'
+                'Land with the transmitter sticks.\n'
+                'Disarm, change the pack, then reconnect.',
+                textAlign: TextAlign.center,
+                style: AppFonts.body(fontSize: 14),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -359,6 +584,8 @@ class _StatusBar extends StatelessWidget {
     required this.connected,
     required this.linkAlive,
     required this.armed,
+    required this.altHoldActive,
+    required this.battery,
     required this.firmware,
     required this.compact,
     required this.resetBusy,
@@ -370,12 +597,19 @@ class _StatusBar extends StatelessWidget {
   final bool connected;
   final bool linkAlive;
   final bool armed;
+  final bool altHoldActive;
+  final SysStatus? battery;
   final String firmware;
   final bool compact;
   final bool resetBusy;
   final VoidCallback onMenuTap;
   final VoidCallback onStatusTap;
   final VoidCallback onResetTap;
+
+  String get _batteryLabel {
+    if (!connected || !linkAlive || battery == null) return '—';
+    return battery!.batteryWidgetText;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -396,8 +630,21 @@ class _StatusBar extends StatelessWidget {
       dotColor = AppColors.cta;
     }
 
-    // Contract: Reset only while connected, link alive, and disarmed.
     final canReset = connected && linkAlive && !armed && !resetBusy;
+    final battText = _batteryLabel;
+    final battKnown =
+        battery != null && battery!.hasVoltage && battery!.hasPercent;
+    final v = battKnown ? battery!.voltageVolts : null;
+    final Color battColor;
+    if (!battKnown) {
+      battColor = Colors.white54;
+    } else if (v! <= kBattCriticalV) {
+      battColor = const Color(0xFFFF8A80);
+    } else if (v <= kBattWarnV) {
+      battColor = const Color(0xFFFFB74D);
+    } else {
+      battColor = AppColors.cta;
+    }
 
     return Material(
       color: AppColors.forest,
@@ -464,15 +711,35 @@ class _StatusBar extends StatelessWidget {
                               ),
                             ),
                             TextSpan(
-                              text:
-                                  '  ·  Armed ${armed ? 'Yes' : 'No'}  ·  $firmware',
+                              text: '  ·  Armed ${armed ? 'Yes' : 'No'}',
                             ),
+                            if (altHoldActive)
+                              TextSpan(
+                                text: '  ·  ALTHOLD',
+                                style: AppFonts.body(
+                                  fontSize: compact ? 11 : 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: const Color(0xFFFFD54F),
+                                ),
+                              ),
+                            TextSpan(text: '  ·  $firmware'),
                           ],
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Text(
+                battText,
+                style: AppFonts.body(
+                  fontSize: compact ? 11 : 12,
+                  fontWeight: FontWeight.w700,
+                  color: battColor,
                 ),
               ),
             ),

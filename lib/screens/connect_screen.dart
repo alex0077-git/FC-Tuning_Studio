@@ -14,12 +14,16 @@ class ConnectScreen extends StatefulWidget {
     super.key,
     required this.session,
     required this.connected,
+    required this.voiceEnabled,
+    required this.onVoiceEnabledChanged,
     required this.onConnected,
     required this.onDisconnected,
   });
 
   final MavSession session;
   final bool connected;
+  final bool voiceEnabled;
+  final ValueChanged<bool> onVoiceEnabledChanged;
   final void Function({
     required String firmware,
     required String boardId,
@@ -184,6 +188,28 @@ class _ConnectScreenState extends State<ConnectScreen> {
               Text(
                 'Install and run this APK on the G20 itself.',
                 style: AppFonts.body(fontSize: 12, color: AppColors.muted),
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(
+                  'Voice cues',
+                  style: AppFonts.body(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                subtitle: Text(
+                  widget.voiceEnabled
+                      ? 'On — armed, battery, AltHold, reset'
+                      : 'Off — APK stays silent',
+                  style: AppFonts.body(fontSize: 12, color: AppColors.muted),
+                ),
+                value: widget.voiceEnabled,
+                activeThumbColor: AppColors.onCta,
+                activeTrackColor: AppColors.cta,
+                onChanged: widget.onVoiceEnabledChanged,
               ),
               const SizedBox(height: 12),
               ElevatedButton(

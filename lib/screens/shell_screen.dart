@@ -2,21 +2,19 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../battery/battery_profile.dart';
 import '../layout/g20_metrics.dart';
 import '../link/mav_session.dart';
 import '../logs/live_log_assembler.dart';
 import '../mavlink/mavlink_v2.dart';
 import '../theme/app_theme.dart';
 import '../voice/fc_voice.dart';
+import 'battery_screen.dart';
 import 'connect_screen.dart';
 import 'logs_screen.dart';
 import 'motor_screen.dart';
 import 'tuning_screen.dart';
 import 'view3d_screen.dart';
-
-/// Firmware 4S resting curve: first caution / must-land (bridge §18).
-const double kBattWarnV = 15.20;
-const double kBattCriticalV = 14.20;
 
 class ShellScreen extends StatefulWidget {
   const ShellScreen({super.key});
@@ -26,10 +24,11 @@ class ShellScreen extends StatefulWidget {
 }
 
 class _ShellScreenState extends State<ShellScreen> {
-  /// 0 Connect · 1 Tuning · 2 Logs · 3 3D · 4 Motor
+  /// 0 Connect · 1 Tuning · 2 Logs · 3 3D · 4 Motor · 5 Battery
   int _pageIndex = 0;
   final MavSession _session = MavSession();
   final FcVoice _voice = FcVoice();
+  final BatteryProfileStore _battStore = BatteryProfileStore();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   StreamSubscription? _hbSub;
   StreamSubscription? _starSub;
@@ -44,13 +43,24 @@ class _ShellScreenState extends State<ShellScreen> {
   bool _altHoldActive = false;
   SysStatus? _battery;
   String _firmware = '—';
+  BatteryProfile _battProfile = BatteryProfile.defaults;
 
-  /// After OK/close on 15.20 V, don't spam until voltage recovers above warn.
   bool _warn1Acked = false;
   bool _warn1Open = false;
-  /// 14.20 V overlay — cannot dismiss until voltage rises.
   bool _criticalLock = false;
-  double? _lastVolts;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadBattProfile());
+  }
+
+  Future<void> _loadBattProfile() async {
+    final p = await _battStore.load();
+    if (!mounted) return;
+    setState(() => _battProfile = p);
+    if (_battery != null) _onBattery(_battery!);
+  }
 
   @override
   void dispose() {
@@ -80,7 +90,6 @@ class _ShellScreenState extends State<ShellScreen> {
     _warn1Acked = false;
     _warn1Open = false;
     _criticalLock = false;
-    _lastVolts = null;
   }
 
   void _onBattery(SysStatus s) {
@@ -88,9 +97,10 @@ class _ShellScreenState extends State<ShellScreen> {
     setState(() => _battery = s);
     if (!s.hasVoltage) return;
     final v = s.voltageVolts;
-    _lastVolts = v;
+    final warnV = _battProfile.warnVolts;
+    final critV = _battProfile.criticalVolts;
 
-    if (v <= kBattCriticalV) {
+    if (v <= critV) {
       if (_warn1Open) {
         Navigator.of(context, rootNavigator: true).pop();
         _warn1Open = false;
@@ -106,7 +116,7 @@ class _ShellScreenState extends State<ShellScreen> {
       setState(() => _criticalLock = false);
     }
 
-    if (v > kBattWarnV) {
+    if (v > warnV) {
       _warn1Acked = false;
       return;
     }
@@ -133,7 +143,8 @@ class _ShellScreenState extends State<ShellScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '${volts.toStringAsFixed(2)} V  — first warning (${kBattWarnV.toStringAsFixed(2)} V).\n'
+                    '${volts.toStringAsFixed(2)} V  — first warning '
+                    '(${_battProfile.warnVolts.toStringAsFixed(2)} V).\n'
                     'Plan to land soon. You may continue.',
                   ),
                   const SizedBox(height: 8),
@@ -371,6 +382,18 @@ class _ShellScreenState extends State<ShellScreen> {
           armed: _armed,
         ),
       ),
+      // Battery profile — usable even before connect.
+      BatteryScreen(
+        key: const ValueKey('battery-screen'),
+        profile: _battProfile,
+        onSaved: (p) {
+          setState(() {
+            _battProfile = p;
+            _warn1Acked = false;
+          });
+          if (_battery != null) _onBattery(_battery!);
+        },
+      ),
     ];
 
     return PopScope(
@@ -396,6 +419,7 @@ class _ShellScreenState extends State<ShellScreen> {
                     armed: _armed,
                     altHoldActive: _altHoldActive,
                     battery: _battery,
+                    profile: _battProfile,
                     firmware: _firmware,
                     compact: g20.compactChrome,
                     resetBusy: _resetBusy,
@@ -412,7 +436,11 @@ class _ShellScreenState extends State<ShellScreen> {
                 ],
               ),
               if (_criticalLock)
-                const Positioned.fill(child: _CriticalBatteryLock()),
+                Positioned.fill(
+                  child: _CriticalBatteryLock(
+                    criticalVolts: _battProfile.criticalVolts,
+                  ),
+                ),
             ],
           ),
         ),
@@ -422,7 +450,8 @@ class _ShellScreenState extends State<ShellScreen> {
 }
 
 class _CriticalBatteryLock extends StatelessWidget {
-  const _CriticalBatteryLock();
+  const _CriticalBatteryLock({required this.criticalVolts});
+  final double criticalVolts;
 
   @override
   Widget build(BuildContext context) {
@@ -452,7 +481,7 @@ class _CriticalBatteryLock extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Battery ≤ ${kBattCriticalV.toStringAsFixed(2)} V.\n'
+                'Battery ≤ ${criticalVolts.toStringAsFixed(2)} V.\n'
                 'This screen stays until voltage rises.\n\n'
                 'Land with the transmitter sticks.\n'
                 'Disarm, change the pack, then reconnect.',
@@ -541,6 +570,12 @@ class _NavDrawer extends StatelessWidget {
               selected: selectedIndex == 4,
               onTap: () => onSelect(4),
             ),
+            _item(
+              icon: Icons.battery_charging_full,
+              label: 'Battery',
+              selected: selectedIndex == 5,
+              onTap: () => onSelect(5),
+            ),
             const Spacer(),
             Padding(
               padding: const EdgeInsets.all(12),
@@ -586,6 +621,7 @@ class _StatusBar extends StatelessWidget {
     required this.armed,
     required this.altHoldActive,
     required this.battery,
+    required this.profile,
     required this.firmware,
     required this.compact,
     required this.resetBusy,
@@ -599,6 +635,7 @@ class _StatusBar extends StatelessWidget {
   final bool armed;
   final bool altHoldActive;
   final SysStatus? battery;
+  final BatteryProfile profile;
   final String firmware;
   final bool compact;
   final bool resetBusy;
@@ -607,8 +644,10 @@ class _StatusBar extends StatelessWidget {
   final VoidCallback onResetTap;
 
   String get _batteryLabel {
-    if (!connected || !linkAlive || battery == null) return '—';
-    return battery!.batteryWidgetText;
+    if (!connected || !linkAlive || battery == null || !battery!.hasVoltage) {
+      return '—';
+    }
+    return profile.labelForVolts(battery!.voltageVolts);
   }
 
   @override
@@ -632,15 +671,14 @@ class _StatusBar extends StatelessWidget {
 
     final canReset = connected && linkAlive && !armed && !resetBusy;
     final battText = _batteryLabel;
-    final battKnown =
-        battery != null && battery!.hasVoltage && battery!.hasPercent;
-    final v = battKnown ? battery!.voltageVolts : null;
+    final hasV = battery != null && battery!.hasVoltage;
+    final v = hasV ? battery!.voltageVolts : null;
     final Color battColor;
-    if (!battKnown) {
+    if (!hasV) {
       battColor = Colors.white54;
-    } else if (v! <= kBattCriticalV) {
+    } else if (v! <= profile.criticalVolts) {
       battColor = const Color(0xFFFF8A80);
-    } else if (v <= kBattWarnV) {
+    } else if (v <= profile.warnVolts) {
       battColor = const Color(0xFFFFB74D);
     } else {
       battColor = AppColors.cta;

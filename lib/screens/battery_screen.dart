@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../battery/battery_profile.dart';
+import '../layout/g20_metrics.dart';
 import '../theme/app_theme.dart';
 
 class BatteryScreen extends StatefulWidget {
@@ -121,63 +122,91 @@ class _BatteryScreenState extends State<BatteryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final g20 = G20Metrics.of(context);
+    final pad = g20.pagePad;
+    final gap = g20.compactChrome ? 8.0 : 10.0;
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      padding: EdgeInsets.fromLTRB(pad, pad, pad, pad),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'Battery profile',
-            style: AppFonts.display(fontSize: 18, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Pick cell type to load pack defaults, then fine-tune voltages. '
-            'Need: 100% V > first warning > second warning.',
-            style: AppFonts.body(fontSize: 12, color: AppColors.muted),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'Cell type',
-            style: AppFonts.body(fontSize: 13, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 4),
-          DropdownButtonFormField<BatteryCellType>(
-            value: _cellType,
-            decoration: const InputDecoration(
-              isDense: true,
-              border: OutlineInputBorder(),
-              helperText: 'Changing type reloads suggested pack voltages',
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                Text(
+                  'Battery profile',
+                  style: AppFonts.display(
+                    fontSize: g20.titleSize,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                SizedBox(height: g20.compactChrome ? 2 : 4),
+                Text(
+                  'Pick cell type to load pack defaults, then fine-tune voltages. '
+                  'Need: 100% V > first warning > second warning.',
+                  style: AppFonts.body(
+                    fontSize: g20.bodySize,
+                    color: AppColors.muted,
+                  ),
+                ),
+                SizedBox(height: g20.compactChrome ? 10 : 14),
+                Text(
+                  'Cell type',
+                  style: AppFonts.body(
+                    fontSize: g20.bodySize,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                DropdownButtonFormField<BatteryCellType>(
+                  value: _cellType,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    helperText: 'Changing type reloads suggested pack voltages',
+                  ),
+                  items: [
+                    for (final t in BatteryCellType.values)
+                      DropdownMenuItem(value: t, child: Text('${t.label} LiPo')),
+                  ],
+                  onChanged: _onCellTypeChanged,
+                ),
+                SizedBox(height: gap),
+                _field(
+                  label: '100% voltage (V)',
+                  helper:
+                      'Full pack ($_cellType → ${BatteryProfile.forCellType(_cellType).fullVolts.toStringAsFixed(2)} V suggested)',
+                  controller: _fullCtrl,
+                  bodySize: g20.bodySize,
+                ),
+                SizedBox(height: gap),
+                _field(
+                  label: 'First warning (V)',
+                  helper: 'Dismissible dialog',
+                  controller: _warnCtrl,
+                  bodySize: g20.bodySize,
+                ),
+                SizedBox(height: gap),
+                _field(
+                  label: 'Second warning (V)',
+                  helper: 'LAND NOW lock + 0% floor for %',
+                  controller: _critCtrl,
+                  bodySize: g20.bodySize,
+                ),
+                if (_error != null) ...[
+                  SizedBox(height: gap),
+                  Text(
+                    _error!,
+                    style: AppFonts.body(fontSize: 12, color: AppColors.danger),
+                  ),
+                ],
+                // Extra room so keyboard / short G20 screens can scroll past last field.
+                SizedBox(height: g20.compactChrome ? 12 : 16),
+              ],
             ),
-            items: [
-              for (final t in BatteryCellType.values)
-                DropdownMenuItem(value: t, child: Text('${t.label} LiPo')),
-            ],
-            onChanged: _onCellTypeChanged,
           ),
-          const SizedBox(height: 10),
-          _field(
-            label: '100% voltage (V)',
-            helper: 'Full pack ($_cellType → ${BatteryProfile.forCellType(_cellType).fullVolts.toStringAsFixed(2)} V suggested)',
-            controller: _fullCtrl,
-          ),
-          const SizedBox(height: 10),
-          _field(
-            label: 'First warning (V)',
-            helper: 'Dismissible dialog',
-            controller: _warnCtrl,
-          ),
-          const SizedBox(height: 10),
-          _field(
-            label: 'Second warning (V)',
-            helper: 'LAND NOW lock + 0% floor for %',
-            controller: _critCtrl,
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 10),
-            Text(_error!, style: AppFonts.body(fontSize: 12, color: AppColors.danger)),
-          ],
-          const Spacer(),
           Row(
             children: [
               Expanded(
@@ -210,11 +239,15 @@ class _BatteryScreenState extends State<BatteryScreen> {
     required String label,
     required String helper,
     required TextEditingController controller,
+    required double bodySize,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: AppFonts.body(fontSize: 13, fontWeight: FontWeight.w600)),
+        Text(
+          label,
+          style: AppFonts.body(fontSize: bodySize, fontWeight: FontWeight.w600),
+        ),
         const SizedBox(height: 4),
         TextField(
           controller: controller,

@@ -9,10 +9,12 @@ import '../logs/live_log_assembler.dart';
 import '../mavlink/mavlink_v2.dart';
 import '../theme/app_theme.dart';
 import '../voice/fc_voice.dart';
+import 'althold_3d_screen.dart';
 import 'battery_screen.dart';
 import 'connect_screen.dart';
 import 'logs_screen.dart';
 import 'motor_screen.dart';
+import 'sim_connect_screen.dart';
 import 'tuning_screen.dart';
 import 'view3d_screen.dart';
 
@@ -24,7 +26,7 @@ class ShellScreen extends StatefulWidget {
 }
 
 class _ShellScreenState extends State<ShellScreen> {
-  /// 0 Connect · 1 Tuning · 2 Logs · 3 3D · 4 Motor · 5 Battery
+  /// 0 Connect · 1 Tuning · 2 Logs · 3 3D · 4 Motor · 5 Battery · 6 Simulation · 7 AltHold 3D
   int _pageIndex = 0;
   final MavSession _session = MavSession();
   final FcVoice _voice = FcVoice();
@@ -79,11 +81,61 @@ class _ShellScreenState extends State<ShellScreen> {
     setState(() => _pageIndex = 0);
   }
 
+  void _openSim() {
+    _scaffoldKey.currentState?.closeDrawer();
+    setState(() => _pageIndex = 6);
+  }
+
   void _openDrawer() => _scaffoldKey.currentState?.openDrawer();
 
   void _goPage(int index) {
     _scaffoldKey.currentState?.closeDrawer();
     setState(() => _pageIndex = index);
+  }
+
+  /// Shared by G20 Connect and Simulation — does not choose the link.
+  void _handleConnected({
+    required String firmware,
+    required String boardId,
+    required int parameterCount,
+    required int linkQualityPercent,
+    required bool armed,
+  }) {
+    final becameArmed = !_armed && armed;
+    final becameDisarmed = _armed && !armed;
+    setState(() {
+      _connected = true;
+      _linkAlive = true;
+      _armed = armed;
+      _firmware = firmware;
+      _pageIndex = 1;
+    });
+    _listenLink();
+    unawaited(_voice.init());
+    if (becameArmed) {
+      unawaited(_voice.sayArmed());
+    } else if (becameDisarmed) {
+      unawaited(_voice.sayDisarmed());
+    }
+  }
+
+  void _handleDisconnected({required int returnPage}) {
+    _hbSub?.cancel();
+    _starSub?.cancel();
+    _liveSub?.cancel();
+    _battSub?.cancel();
+    _linkWatch?.cancel();
+    setState(() {
+      _connected = false;
+      _linkAlive = false;
+      _armed = false;
+      _altHoldActive = false;
+      _battery = null;
+      _firmware = '—';
+      _resetBusy = false;
+      _pageIndex = returnPage;
+      _clearBatteryWarns();
+    });
   }
 
   void _clearBatteryWarns() {
@@ -301,48 +353,8 @@ class _ShellScreenState extends State<ShellScreen> {
           setState(() => _voice.enabled = on);
           unawaited(_voice.setEnabled(on));
         },
-        onConnected: ({
-          required firmware,
-          required boardId,
-          required parameterCount,
-          required linkQualityPercent,
-          required armed,
-        }) {
-          final becameArmed = !_armed && armed;
-          final becameDisarmed = _armed && !armed;
-          setState(() {
-            _connected = true;
-            _linkAlive = true;
-            _armed = armed;
-            _firmware = firmware;
-            _pageIndex = 1;
-          });
-          _listenLink();
-          unawaited(_voice.init());
-          if (becameArmed) {
-            unawaited(_voice.sayArmed());
-          } else if (becameDisarmed) {
-            unawaited(_voice.sayDisarmed());
-          }
-        },
-        onDisconnected: () {
-          _hbSub?.cancel();
-          _starSub?.cancel();
-          _liveSub?.cancel();
-          _battSub?.cancel();
-          _linkWatch?.cancel();
-          setState(() {
-            _connected = false;
-            _linkAlive = false;
-            _armed = false;
-            _altHoldActive = false;
-            _battery = null;
-            _firmware = '—';
-            _resetBusy = false;
-            _pageIndex = 0;
-            _clearBatteryWarns();
-          });
-        },
+        onConnected: _handleConnected,
+        onDisconnected: () => _handleDisconnected(returnPage: 0),
       ),
       _LockedPage(
         key: const ValueKey('tuning'),
@@ -394,6 +406,23 @@ class _ShellScreenState extends State<ShellScreen> {
           if (_battery != null) _onBattery(_battery!);
         },
       ),
+      // Simulation — mock FC; parallel to G20 Connect (no UDP).
+      SimConnectScreen(
+        key: const ValueKey('sim-connect'),
+        session: _session,
+        connected: _connected,
+        onConnected: _handleConnected,
+        onDisconnected: () => _handleDisconnected(returnPage: 6),
+      ),
+      _LockedPage(
+        key: const ValueKey('althold-3d'),
+        locked: !_connected,
+        onConnectTap: _openConnect,
+        child: Althold3dScreen(
+          key: const ValueKey('althold-3d-screen'),
+          session: _connected ? _session : null,
+        ),
+      ),
     ];
 
     return PopScope(
@@ -407,6 +436,7 @@ class _ShellScreenState extends State<ShellScreen> {
                 connected: _connected,
                 onSelect: _goPage,
                 onConnect: _openConnect,
+                onSim: _openSim,
               ),
         body: SafeArea(
           child: Stack(
@@ -428,8 +458,11 @@ class _ShellScreenState extends State<ShellScreen> {
                     onResetTap: _confirmReset,
                   ),
                   Expanded(
+                    // Tight constraints so Tuning/Motor/3D Expanded layouts
+                    // work on Windows desktop (loose IndexedStack breaks them).
                     child: IndexedStack(
                       index: _pageIndex,
+                      sizing: StackFit.expand,
                       children: pages,
                     ),
                   ),
@@ -502,12 +535,14 @@ class _NavDrawer extends StatelessWidget {
     required this.connected,
     required this.onSelect,
     required this.onConnect,
+    required this.onSim,
   });
 
   final int selectedIndex;
   final bool connected;
   final ValueChanged<int> onSelect;
   final VoidCallback onConnect;
+  final VoidCallback onSim;
 
   @override
   Widget build(BuildContext context) {
@@ -540,43 +575,61 @@ class _NavDrawer extends StatelessWidget {
               ),
             ),
             const Divider(color: Colors.white24, height: 1),
-            _item(
-              icon: Icons.link,
-              label: 'Connect',
-              selected: selectedIndex == 0,
-              onTap: onConnect,
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  _item(
+                    icon: Icons.link,
+                    label: 'Connect',
+                    selected: selectedIndex == 0,
+                    onTap: onConnect,
+                  ),
+                  _item(
+                    icon: Icons.science,
+                    label: 'Simulation',
+                    selected: selectedIndex == 6,
+                    onTap: onSim,
+                  ),
+                  _item(
+                    icon: Icons.tune,
+                    label: 'Tuning',
+                    selected: selectedIndex == 1,
+                    onTap: () => onSelect(1),
+                  ),
+                  _item(
+                    icon: Icons.bar_chart,
+                    label: 'Logs',
+                    selected: selectedIndex == 2,
+                    onTap: () => onSelect(2),
+                  ),
+                  _item(
+                    icon: Icons.view_in_ar,
+                    label: '3D',
+                    selected: selectedIndex == 3,
+                    onTap: () => onSelect(3),
+                  ),
+                  _item(
+                    icon: Icons.height,
+                    label: 'AltHold 3D',
+                    selected: selectedIndex == 7,
+                    onTap: () => onSelect(7),
+                  ),
+                  _item(
+                    icon: Icons.settings_input_component,
+                    label: 'Motor',
+                    selected: selectedIndex == 4,
+                    onTap: () => onSelect(4),
+                  ),
+                  _item(
+                    icon: Icons.battery_charging_full,
+                    label: 'Battery',
+                    selected: selectedIndex == 5,
+                    onTap: () => onSelect(5),
+                  ),
+                ],
+              ),
             ),
-            _item(
-              icon: Icons.tune,
-              label: 'Tuning',
-              selected: selectedIndex == 1,
-              onTap: () => onSelect(1),
-            ),
-            _item(
-              icon: Icons.bar_chart,
-              label: 'Logs',
-              selected: selectedIndex == 2,
-              onTap: () => onSelect(2),
-            ),
-            _item(
-              icon: Icons.view_in_ar,
-              label: '3D',
-              selected: selectedIndex == 3,
-              onTap: () => onSelect(3),
-            ),
-            _item(
-              icon: Icons.settings_input_component,
-              label: 'Motor',
-              selected: selectedIndex == 4,
-              onTap: () => onSelect(4),
-            ),
-            _item(
-              icon: Icons.battery_charging_full,
-              label: 'Battery',
-              selected: selectedIndex == 5,
-              onTap: () => onSelect(5),
-            ),
-            const Spacer(),
             Padding(
               padding: const EdgeInsets.all(12),
               child: Text(

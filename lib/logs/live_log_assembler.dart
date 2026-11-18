@@ -97,8 +97,10 @@ class LiveLogFields {
   static final _z = RegExp(
     r'Z\s+(-?\d+(?:\.\d+)?)\s+raw\s+(-?\d+(?:\.\d+)?)',
   );
+  // dU / i are optional so short mock AH lines still parse act + tgt.
   static final _ah = RegExp(
-    r'AH\s+en=(\d+)\s+act=(\d+)\s+tgt\s+(-?\d+(?:\.\d+)?)\s+err\s+(-?\d+(?:\.\d+)?)\s+dU\s+(-?\d+(?:\.\d+)?)\s+i\s+(-?\d+(?:\.\d+)?)',
+    r'AH\s+en=(\d+)\s+act=(\d+)\s+tgt\s+(-?\d+(?:\.\d+)?)\s+err\s+(-?\d+(?:\.\d+)?)'
+    r'(?:\s+dU\s+(-?\d+(?:\.\d+)?)\s+i\s+(-?\d+(?:\.\d+)?))?',
   );
   static final _motors = RegExp(
     r'M\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+us',

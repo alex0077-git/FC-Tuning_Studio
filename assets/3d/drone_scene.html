@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>Betaflight Quad X</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #222222; overflow: hidden; touch-action: none; }
+    html, body { margin: 0; height: 100%; background: #141414; overflow: hidden; touch-action: none; }
     canvas { display: block; width: 100%; height: 100%; }
     #err {
       position: absolute; left: 12px; bottom: 12px; color: #ff8888;
@@ -22,11 +22,15 @@
 <div id="hint">1-finger orbit · 2-finger zoom/pan</div>
 <script>
 /**
- * Betaflight quad_x.gltf + orbit/zoom. Attitude rotates the craft; camera is free.
+ * Betaflight quad_x.gltf + orbit/zoom. Attitude rotates the craft; camera is free
+ * or locked side view (AltHold page).
  */
 (function () {
   var DEG2RAD = 0.017453292519943295;
+  var M_TO_SCENE = 20; // 1 m → 20 scene units (matches ~scale 15 craft)
+  var viewMode = 'orbit'; // 'orbit' | 'side'
   var errEl = document.getElementById('err');
+  var hintEl = document.getElementById('hint');
   function showErr(msg) {
     if (!errEl) return;
     errEl.style.display = 'block';
@@ -39,14 +43,17 @@
   if (typeof THREE.OrbitControls === 'undefined') { showErr('OrbitControls missing'); return; }
 
   var scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x222222);
+  scene.background = new THREE.Color(0x141414);
 
   var camera = new THREE.PerspectiveCamera(60, 1, 1, 10000);
   camera.position.set(40, 50, 125);
+  // AltHold side view: ortho so craft/ring Y matches Flutter meter tape.
+  var orthoCamera = new THREE.OrthographicCamera(-100, 100, 100, -100, 1, 10000);
+  var activeCamera = camera;
 
   var renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setClearColor(0x222222, 1);
+  renderer.setClearColor(0x141414, 1);
   document.body.appendChild(renderer.domElement);
 
   var controls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -88,9 +95,33 @@
   var grid = new THREE.GridHelper(200, 20, 0x444444, 0x333333);
   scene.add(grid);
 
+  // Mustard latch ring (AppColors.cta) — BF quad_x model unchanged.
+  var latchRing = new THREE.Mesh(
+    new THREE.RingGeometry(11.4, 12.5, 64),
+    new THREE.MeshBasicMaterial({
+      color: 0xf5c518,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.95
+    })
+  );
+  latchRing.rotation.x = -Math.PI / 2; // flat / parallel to ground
+  latchRing.visible = false;
+  scene.add(latchRing);
+
   var model = null;
   var target = { x: 0, y: 0, z: 0 };
   var current = { x: 0, y: 0, z: 0 };
+  // Same span as Flutter AltHold tape (lo/hi updated from host).
+  var altState = { zM: 0, latchM: null, lo: 0, hi: 4 };
+  // Must match Flutter _AltitudeScalePainter pads.
+  var TOP_PAD = 56;
+  var BOT_PAD = 52;
+  // Center of the left AltHold panel (0.5 = middle of the BF view).
+  var CRAFT_X_FRAC = 0.5;
+  // Side camera yaw from pure +Z and elevation above horizontal (degrees).
+  var SIDE_YAW_DEG = 30;
+  var SIDE_ELEV_DEG = 22;
 
   /** Front-right / rear-left = green; front-left / rear-right = red (diagonals). */
   function colorDiagonalProps(root) {
@@ -119,11 +150,21 @@
     });
   }
 
+  var ORBIT_SCALE = 15;   // main 3D page — unchanged
+  var SIDE_SCALE = 2.6;   // AltHold: exact BF model, kept small vs meter tape
+
+  function applyModelScale() {
+    if (!model) return;
+    var s = (viewMode === 'side') ? SIDE_SCALE : ORBIT_SCALE;
+    model.scale.set(s, s, s);
+  }
+
   function onModel(root) {
     model = root;
-    model.scale.set(15, 15, 15);
+    applyModelScale();
     colorDiagonalProps(model);
     modelWrapper.add(model);
+    if (viewMode === 'side') sideLookAtCraft();
     render();
   }
 
@@ -153,6 +194,7 @@
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h, false);
+    if (viewMode === 'side') sideLookAtCraft();
     render();
   }
   window.addEventListener('resize', resize);
@@ -160,11 +202,149 @@
 
   window.setAttitude = function (rollDeg, pitchDeg, yawDeg) {
     target.x = (pitchDeg || 0) * -1 * DEG2RAD;
-    target.y = (yawDeg || 0) * -1 * DEG2RAD;
+    // Side view: keep yaw fixed so we stay looking at the profile.
+    if (viewMode === 'side') {
+      target.y = 0;
+    } else {
+      target.y = (yawDeg || 0) * -1 * DEG2RAD;
+    }
     target.z = (rollDeg || 0) * -1 * DEG2RAD;
   };
 
+  /** Lock ortho frustum to Flutter lo/hi + the same top/bottom pads. */
+  function sideLookAtCraft() {
+    applyModelScale();
+    var w = Math.max(window.innerWidth, 1);
+    var h = Math.max(window.innerHeight, 1);
+    var lo = altState.lo;
+    var hi = Math.max(altState.hi, lo + 0.5);
+    var yLo = lo * M_TO_SCENE;
+    var yHi = hi * M_TO_SCENE;
+    var usable = Math.max(yHi - yLo, M_TO_SCENE * 0.5);
+    var usablePx = Math.max(h - TOP_PAD - BOT_PAD, 1);
+    var fullH = usable * (h / usablePx);
+    var worldBottom = yLo - (BOT_PAD / h) * fullH;
+    var worldTop = yHi + (TOP_PAD / h) * fullH;
+    var midY = (worldBottom + worldTop) * 0.5;
+    var halfH = (worldTop - worldBottom) * 0.5;
+    var halfW = halfH * (w / h);
+
+    // Craft stays at world X=0; camera look-at is shifted so the craft
+    // lands at CRAFT_X_FRAC on screen (lookAt was following the craft before,
+    // which always centered it no matter where we moved it).
+    var craftX = 0;
+    modelWrapper.position.x = craftX;
+    if (latchRing.visible) {
+      latchRing.position.x = craftX;
+    }
+
+    orthoCamera.left = -halfW;
+    orthoCamera.right = halfW;
+    orthoCamera.top = halfH;
+    orthoCamera.bottom = -halfH;
+    orthoCamera.near = 1;
+    orthoCamera.far = 5000;
+
+    // lookAt X is screen-center. Offset right of craft → craft appears left.
+    var lookX = craftX + halfW * (1 - 2 * CRAFT_X_FRAC);
+
+    // ~30° side angle + slight elevation so the BF craft/ring read in 3D.
+    var yaw = SIDE_YAW_DEG * DEG2RAD;
+    var elev = SIDE_ELEV_DEG * DEG2RAD;
+    var dist = 240;
+    var cy = Math.cos(yaw);
+    var sy = Math.sin(yaw);
+    var ce = Math.cos(elev);
+    var se = Math.sin(elev);
+    orthoCamera.position.set(
+      lookX + sy * ce * dist,
+      midY + se * dist,
+      cy * ce * dist
+    );
+    orthoCamera.up.set(0, 1, 0);
+    orthoCamera.lookAt(lookX, midY, 0);
+    orthoCamera.updateProjectionMatrix();
+
+    activeCamera = orthoCamera;
+    controls.object = orthoCamera;
+    controls.target.set(lookX, midY, 0);
+    controls.enableRotate = false;
+    controls.enablePan = false;
+    controls.enableZoom = false; // keep Y locked to Flutter tape
+    controls.update();
+  }
+
+  /**
+   * Live height + latch (meters). Optional lo/hi must match Flutter scale span
+   * so craft, ring, and graph marks share identical meter → Y mapping.
+   */
+  window.setAltitude = function (zM, latchM, lo, hi) {
+    altState.zM = typeof zM === 'number' ? zM : 0;
+    altState.latchM = (typeof latchM === 'number') ? latchM : null;
+    if (typeof lo === 'number') altState.lo = lo;
+    if (typeof hi === 'number') altState.hi = hi;
+    if (!(typeof lo === 'number') || !(typeof hi === 'number')) {
+      var need = Math.max(4.0, altState.zM + 1.0);
+      if (altState.latchM != null) need = Math.max(need, altState.latchM + 1.0);
+      altState.lo = 0;
+      altState.hi = need;
+    }
+    var y = altState.zM * M_TO_SCENE;
+    modelWrapper.position.y = y;
+    if (viewMode === 'side' && altState.latchM != null) {
+      latchRing.visible = true;
+      latchRing.position.set(modelWrapper.position.x, altState.latchM * M_TO_SCENE, 0);
+    } else {
+      latchRing.visible = false;
+    }
+    if (viewMode === 'side') sideLookAtCraft();
+    else modelWrapper.position.x = 0;
+  };
+
+  window.setViewMode = function (mode) {
+    viewMode = (mode === 'side') ? 'side' : 'orbit';
+    applyModelScale();
+    if (viewMode === 'side') {
+      if (hintEl) hintEl.style.display = 'none';
+      grid.visible = false;
+      sideLookAtCraft();
+      if (altState.latchM != null) {
+        latchRing.visible = true;
+        latchRing.position.set(
+          modelWrapper.position.x,
+          altState.latchM * M_TO_SCENE,
+          0
+        );
+      }
+    } else {
+      activeCamera = camera;
+      controls.object = camera;
+      controls.enableRotate = true;
+      controls.enablePan = true;
+      controls.enableZoom = true;
+      controls.minDistance = 30;
+      controls.maxDistance = 500;
+      if (hintEl) {
+        hintEl.style.display = '';
+        hintEl.textContent = '1-finger orbit · 2-finger zoom/pan';
+      }
+      latchRing.visible = false;
+      grid.visible = true;
+      modelWrapper.position.x = 0;
+      modelWrapper.position.y = 0;
+      camera.position.set(40, 50, 125);
+      controls.target.set(0, 0, 0);
+    }
+    controls.update();
+    render();
+  };
+
   window.resetCamera = function () {
+    if (viewMode === 'side') {
+      window.setViewMode('side');
+      window.setAltitude(altState.zM, altState.latchM, altState.lo, altState.hi);
+      return;
+    }
     camera.position.set(40, 50, 125);
     controls.target.set(0, 0, 0);
     controls.update();
@@ -175,8 +355,17 @@
     var d = e.data;
     if (!d || typeof d !== 'object') return;
     if (d.type === 'attitude') window.setAttitude(d.roll, d.pitch, d.yaw);
+    if (d.type === 'altitude') {
+      window.setAltitude(d.zM, d.latchM, d.lo, d.hi);
+    }
+    if (d.type === 'viewMode') window.setViewMode(d.mode);
     if (d.type === 'resetCamera') window.resetCamera();
   });
+
+  // Optional boot flag from Flutter host HTML inject.
+  if (window.__BF_VIEW_MODE__) {
+    window.setViewMode(window.__BF_VIEW_MODE__);
+  }
 
   function lerp(a, b, t) { return a + (b - a) * t; }
 
@@ -185,12 +374,19 @@
       current.x = lerp(current.x, target.x, 0.28);
       current.y = lerp(current.y, target.y, 0.28);
       current.z = lerp(current.z, target.z, 0.28);
-      model.rotation.x = current.x;
+      // Soft hover bob + tiny attitude jitter when airborne.
+      var flying = altState.zM > 0.12;
+      var t = performance.now() * 0.001;
+      var bob = flying ? Math.sin(t * 2.6) * 0.4 : 0;
+      var jx = flying ? Math.sin(t * 5.8) * 0.014 : 0;
+      var jz = flying ? Math.cos(t * 5.1) * 0.014 : 0;
+      model.position.y = bob;
+      model.rotation.x = current.x + jx;
       modelWrapper.rotation.y = current.y;
-      model.rotation.z = current.z;
+      model.rotation.z = current.z + jz;
     }
     controls.update();
-    renderer.render(scene, camera);
+    renderer.render(scene, activeCamera);
   }
 
   function animate() {

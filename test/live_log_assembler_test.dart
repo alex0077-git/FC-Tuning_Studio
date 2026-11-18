@@ -51,7 +51,21 @@ void main() {
     expect(f.tempC, 29.53);
     expect(f.zM, 0.48);
     expect(f.ahEn, 1);
+    expect(f.ahAct, 1);
+    expect(f.tgt, 0.45);
     expect(f.m1, 1000);
     expect(f.sats, 0);
+  });
+
+  test('parse short mock AH without dU/i', () {
+    const line = 'ARM Z 1.50 raw 1.50 AH en=1 act=1 tgt 1.50 err 0.00';
+    final f = LiveLogFields.parse(line);
+    expect(f.zM, 1.50);
+    expect(f.ahEn, 1);
+    expect(f.ahAct, 1);
+    expect(f.tgt, 1.50);
+    expect(f.err, 0.00);
+    expect(f.dU, isNull);
+    expect(f.iUs, isNull);
   });
 }

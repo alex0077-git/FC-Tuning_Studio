@@ -148,11 +148,25 @@ class _Althold3dScreenState extends State<Althold3dScreen> {
     }
   }
 
+  /// Sliding window around current height (at 5 m → 2..6).
+  /// Same span drives tape, 3D host, and Target vs Current graph.
   (double, double) _span() {
-    var hi = 4.0;
-    hi = math.max(hi, _zM + 1.0);
-    if (_latchM != null) hi = math.max(hi, _latchM! + 1.0);
-    return (0.0, hi);
+    var lo = _zM - 3.0;
+    var hi = _zM + 1.0;
+
+    if (_latchM != null) {
+      lo = math.min(lo, _latchM! - 1.0);
+      hi = math.max(hi, _latchM! + 1.0);
+    }
+
+    if (lo < 0) {
+      hi -= lo;
+      lo = 0;
+    }
+    if (hi - lo < 4.0) {
+      hi = lo + 4.0;
+    }
+    return (lo, hi);
   }
 
   @override
@@ -225,6 +239,7 @@ class _Althold3dScreenState extends State<Althold3dScreen> {
                       child: _AltitudeHistoryChart(
                         samples: _hist.toList(growable: false),
                         windowS: _histWindowS,
+                        loM: span.$1,
                         hiM: span.$2,
                         currentM: _zM,
                         targetM: targetM,
@@ -363,6 +378,7 @@ class _AltitudeHistoryChart extends StatelessWidget {
   const _AltitudeHistoryChart({
     required this.samples,
     required this.windowS,
+    required this.loM,
     required this.hiM,
     required this.currentM,
     required this.targetM,
@@ -370,6 +386,7 @@ class _AltitudeHistoryChart extends StatelessWidget {
 
   final List<_HistSample> samples;
   final double windowS;
+  final double loM;
   final double hiM;
   final double currentM;
   final double? targetM;
@@ -386,10 +403,18 @@ class _AltitudeHistoryChart extends StatelessWidget {
       for (final s in samples)
         if (s.t >= minX && s.tgtM != null) FlSpot(s.t - nowT, s.tgtM!),
     ];
-    if (actual.isEmpty) actual.add(const FlSpot(0, 0));
+    if (actual.isEmpty) actual.add(FlSpot(0, currentM));
 
     final tgtLabel = targetM == null ? '—' : targetM!.toStringAsFixed(2);
     final curLabel = currentM.toStringAsFixed(2);
+    final ySpan = math.max(hiM - loM, 0.5);
+    final yStep = ySpan <= 8
+        ? 1.0
+        : ySpan <= 20
+            ? 2.0
+            : ySpan <= 50
+                ? 5.0
+                : 10.0;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
@@ -418,13 +443,13 @@ class _AltitudeHistoryChart extends StatelessWidget {
               LineChartData(
                 minX: -windowS,
                 maxX: 0,
-                minY: 0,
+                minY: loM,
                 maxY: hiM,
                 clipData: const FlClipData.all(),
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: true,
-                  horizontalInterval: 1,
+                  horizontalInterval: yStep,
                   verticalInterval: 5,
                   getDrawingHorizontalLine: (_) => FlLine(
                     color: Colors.white.withValues(alpha: 0.06),
@@ -450,7 +475,7 @@ class _AltitudeHistoryChart extends StatelessWidget {
                     sideTitles: SideTitles(
                       showTitles: true,
                       reservedSize: 32,
-                      interval: 1,
+                      interval: yStep,
                       getTitlesWidget: (v, _) => Text(
                         '${v.toStringAsFixed(0)}m',
                         style: TextStyle(
@@ -627,8 +652,16 @@ class _AltitudeScalePainter extends CustomPainter {
     );
 
     final tp = TextPainter(textDirection: TextDirection.ltr);
-    final first = lo.ceilToDouble();
-    for (var m = first; m <= hi + 1e-6; m += 1.0) {
+    final spanM = math.max(hi - lo, 0.5);
+    final step = spanM <= 8
+        ? 1.0
+        : spanM <= 20
+            ? 2.0
+            : spanM <= 50
+                ? 5.0
+                : 10.0;
+    final first = (lo / step).ceil() * step;
+    for (var m = first; m <= hi + 1e-6; m += step) {
       final y = yOf(m);
       canvas.drawLine(
         Offset(sx - 12, y),

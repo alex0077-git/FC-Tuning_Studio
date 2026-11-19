@@ -120,7 +120,9 @@ class AppTheme {
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.cta,
           foregroundColor: AppColors.onCta,
-          minimumSize: const Size.fromHeight(48),
+          // Size.fromHeight sets min width = infinity and breaks buttons in Rows
+          // on Windows/desktop. Height-only floor with flexible width.
+          minimumSize: const Size(0, 48),
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(radiusLg),
@@ -131,7 +133,7 @@ class AppTheme {
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: AppColors.forest,
-          minimumSize: const Size.fromHeight(44),
+          minimumSize: const Size(0, 44),
           side: const BorderSide(color: AppColors.border),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(radiusLg),

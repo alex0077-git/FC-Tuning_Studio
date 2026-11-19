@@ -190,32 +190,37 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 style: AppFonts.body(fontSize: 12, color: AppColors.muted),
               ),
               const SizedBox(height: 8),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: Text(
-                  'Voice cues',
-                  style: AppFonts.body(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+              Material(
+                color: Colors.transparent,
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(
+                    'Voice cues',
+                    style: AppFonts.body(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
+                  subtitle: Text(
+                    widget.voiceEnabled
+                        ? 'On — armed, battery, AltHold, reset'
+                        : 'Off — APK stays silent',
+                    style: AppFonts.body(fontSize: 12, color: AppColors.muted),
+                  ),
+                  value: widget.voiceEnabled,
+                  activeThumbColor: AppColors.onCta,
+                  activeTrackColor: AppColors.cta,
+                  onChanged: widget.onVoiceEnabledChanged,
                 ),
-                subtitle: Text(
-                  widget.voiceEnabled
-                      ? 'On — armed, battery, AltHold, reset'
-                      : 'Off — APK stays silent',
-                  style: AppFonts.body(fontSize: 12, color: AppColors.muted),
-                ),
-                value: widget.voiceEnabled,
-                activeThumbColor: AppColors.onCta,
-                activeTrackColor: AppColors.cta,
-                onChanged: widget.onVoiceEnabledChanged,
               ),
               const SizedBox(height: 12),
               ElevatedButton(
                 onPressed: _busy ? null : _toggleConnect,
                 style: ElevatedButton.styleFrom(
-                  minimumSize: Size.fromHeight(g20.compactChrome ? 42 : 48),
+                  // Keep G20 UDP connect logic unchanged; only fix desktop
+                  // layout (Size.fromHeight = infinite min width).
+                  minimumSize: Size(0, g20.compactChrome ? 42 : 48),
                   backgroundColor:
                       widget.connected ? AppColors.danger : AppColors.cta,
                   foregroundColor:

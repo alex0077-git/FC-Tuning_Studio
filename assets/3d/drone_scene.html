@@ -302,7 +302,9 @@
   };
 
   window.setViewMode = function (mode) {
-    viewMode = (mode === 'side') ? 'side' : 'orbit';
+    var next = (mode === 'side') ? 'side' : 'orbit';
+    var changed = (next !== viewMode);
+    viewMode = next;
     applyModelScale();
     if (viewMode === 'side') {
       if (hintEl) hintEl.style.display = 'none';
@@ -331,9 +333,12 @@
       latchRing.visible = false;
       grid.visible = true;
       modelWrapper.position.x = 0;
-      modelWrapper.position.y = 0;
-      camera.position.set(40, 50, 125);
-      controls.target.set(0, 0, 0);
+      // Only snap orbit camera when entering orbit (keeps pinch/zoom while linked).
+      if (changed) {
+        modelWrapper.position.y = 0;
+        camera.position.set(40, 50, 125);
+        controls.target.set(0, 0, 0);
+      }
     }
     controls.update();
     render();

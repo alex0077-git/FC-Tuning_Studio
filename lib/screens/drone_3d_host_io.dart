@@ -120,7 +120,7 @@ $body
       final suffix =
           widget.viewMode == Drone3dViewMode.side ? 'side' : 'orbit';
       // Bump name when scene HTML framing changes so WebView does not keep a stale file.
-      final file = File('${dir.path}/bf_quad_x_view_${suffix}_v15.html');
+      final file = File('${dir.path}/bf_quad_x_view_${suffix}_v16.html');
       await file.writeAsString(html, flush: true);
 
       if (!kIsWeb && Platform.isWindows) {
@@ -152,6 +152,7 @@ $body
     _winLoadSub = controller.loadingState.listen((state) {
       if (state == win.LoadingState.navigationCompleted) {
         _ready = true;
+        // Boot HTML already applied __BF_VIEW_MODE__; keep pushing attitude only.
         _pushAll();
       }
     });
@@ -198,10 +199,11 @@ $body
   @override
   void didUpdateWidget(covariant Drone3dHost oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _pushAll();
+    // Do not re-apply setViewMode every telemetry tick — that resets orbit zoom.
+    _pushAll(pushViewMode: oldWidget.viewMode != widget.viewMode);
   }
 
-  void _pushAll() {
+  void _pushAll({bool pushViewMode = false}) {
     if (!_ready) return;
     final latch = widget.latchM;
     final latchJs = latch == null ? 'null' : latch.toString();
@@ -209,8 +211,11 @@ $body
     final lo = widget.scaleLo;
     final hi = widget.scaleHi;
     final loHiJs = (lo != null && hi != null) ? ', $lo, $hi' : '';
+    final viewJs = pushViewMode
+        ? "window.setViewMode && window.setViewMode('$_modeJs');\n"
+        : '';
     final js = '''
-window.setViewMode && window.setViewMode('$_modeJs');
+$viewJs
 window.setAttitude && window.setAttitude(${widget.rollDeg}, ${widget.pitchDeg}, ${widget.yawDeg});
 window.setAltitude && window.setAltitude($zJs, $latchJs$loHiJs);
 ''';

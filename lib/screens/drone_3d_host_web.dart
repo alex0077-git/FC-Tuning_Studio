@@ -118,7 +118,7 @@ $body
   @override
   void didUpdateWidget(covariant Drone3dHost oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _postAll();
+    _postAll(pushViewMode: oldWidget.viewMode != widget.viewMode);
   }
 
   @override
@@ -128,14 +128,16 @@ $body
     super.dispose();
   }
 
-  void _postAll() {
+  void _postAll({bool pushViewMode = false}) {
     if (!_ready) return;
     final win = _iframe?.contentWindow;
     if (win == null) return;
-    win.postMessage({
-      'type': 'viewMode',
-      'mode': widget.viewMode == Drone3dViewMode.side ? 'side' : 'orbit',
-    }, '*');
+    if (pushViewMode) {
+      win.postMessage({
+        'type': 'viewMode',
+        'mode': widget.viewMode == Drone3dViewMode.side ? 'side' : 'orbit',
+      }, '*');
+    }
     win.postMessage({
       'type': 'attitude',
       'roll': widget.rollDeg,

@@ -1,8 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../layout/g20_metrics.dart';
 import '../link/g20_udp_link.dart';
@@ -63,16 +61,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
       await widget.session.connect(G20UdpLink());
       await widget.session.waitHeartbeat();
 
-      var usedCatalogFallback = false;
+      // Live FC RAM only — never seed catalog/mock values into Tuning.
       try {
         await widget.session.downloadParams();
       } catch (e) {
-        // HEARTBEAT/ATTITUDE already prove the link. If PARAM_VALUE never
-        // arrives, seed catalog defaults so Tuning/3D still open (QGC-proven FC).
-        final defaults = await _catalogDefaults();
-        if (defaults.isEmpty) rethrow;
-        widget.session.seedParams(defaults);
-        usedCatalogFallback = true;
         if (mounted) {
           final link = widget.session;
           final hint = link.msgidCounts.isEmpty
@@ -80,10 +72,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
               : ' msgs=${link.msgidCounts}';
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              duration: const Duration(seconds: 5),
+              duration: const Duration(seconds: 6),
               content: Text(
-                'Linked (HB OK) — live params missing, catalog defaults.$hint '
-                'Close QGC. Write needs app→FC uplink.',
+                'Linked (HB OK) — FC params not downloaded.$hint '
+                'Close QGC, then use Tuning → Revert to load live RAM.',
               ),
             ),
           );
@@ -97,7 +89,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
         _busy = false;
         _firmware = 'MAVLink v2';
         _boardId = 'sys 1 / comp 1';
-        _parameters = usedCatalogFallback ? '$count (catalog)' : '$count';
+        _parameters = '$count';
         _linkQuality = armed ? 'armed' : 'disarmed';
       });
 
@@ -121,25 +113,6 @@ class _ConnectScreenState extends State<ConnectScreen> {
           content: Text(msg),
         ),
       );
-    }
-  }
-
-  Future<Map<String, double>> _catalogDefaults() async {
-    try {
-      final raw = await rootBundle.loadString('assets/params_catalog.json');
-      final json = jsonDecode(raw) as Map<String, dynamic>;
-      final list = json['params'] as List<dynamic>? ?? [];
-      final out = <String, double>{};
-      for (final item in list) {
-        final m = item as Map<String, dynamic>;
-        final id = m['id'] as String?;
-        final def = m['default'];
-        if (id == null || def == null) continue;
-        out[id] = (def as num).toDouble();
-      }
-      return out;
-    } catch (_) {
-      return {};
     }
   }
 

@@ -68,10 +68,18 @@ abstract final class FcParamIds {
 }
 
 class TuningScreen extends StatefulWidget {
-  const TuningScreen({super.key, required this.session, this.armed = false});
+  const TuningScreen({
+    super.key,
+    required this.session,
+    this.armed = false,
+    this.paramsRevision = 0,
+  });
 
   final MavSession session;
   final bool armed;
+
+  /// Bumped by shell after Reset (or other bulk FC RAM reload) so editors refresh.
+  final int paramsRevision;
 
   @override
   State<TuningScreen> createState() => _TuningScreenState();
@@ -91,60 +99,109 @@ class _TuningScreenState extends State<TuningScreen>
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _fc = _gainsFromParams(widget.session.params);
-    _edited = _fc.clone();
+    final next = _gainsFromParams(widget.session.params);
+    _fc = next;
+    _edited = next.clone();
+    widget.session.paramsEpoch.addListener(_onParamsEpoch);
   }
 
   @override
   void dispose() {
+    widget.session.paramsEpoch.removeListener(_onParamsEpoch);
     _tabs.dispose();
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant TuningScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.session != widget.session) {
+      oldWidget.session.paramsEpoch.removeListener(_onParamsEpoch);
+      widget.session.paramsEpoch.addListener(_onParamsEpoch);
+      _syncEditorsFromSession(forceEdited: true);
+      return;
+    }
+    if (oldWidget.paramsRevision != widget.paramsRevision) {
+      _syncEditorsFromSession(forceEdited: true);
+    }
+  }
+
+  /// Session map changed (connect download, Write, Reset reload, Revert).
+  void _onParamsEpoch() {
+    if (!mounted || _writing) return;
+    // Snap sliders to live FC RAM immediately (no waiting for a full download).
+    _syncEditorsFromSession(forceEdited: true);
+  }
+
+  void _syncEditorsFromSession({required bool forceEdited}) {
+    final next = _gainsFromParams(widget.session.params);
+    setState(() {
+      _fc = next;
+      if (forceEdited) _edited = next.clone();
+    });
+  }
+
+  /// Only values present in FC/session RAM — no catalog / baked-in UI defaults.
   _Gains _gainsFromParams(Map<String, double> p) {
-    double g(String id, double fb) => p[id] ?? fb;
+    double g(String id) => p[id] ?? 0.0;
     return _Gains(
-      outerRollP: g(FcParamIds.outerRoll, 6),
-      outerPitchP: g(FcParamIds.outerPitch, 8),
-      outerYawP: g(FcParamIds.outerYaw, 0),
+      outerRollP: g(FcParamIds.outerRoll),
+      outerPitchP: g(FcParamIds.outerPitch),
+      outerYawP: g(FcParamIds.outerYaw),
       innerRoll: _Pid(
-        p: g(FcParamIds.rollP, 1.0),
-        i: g(FcParamIds.rollI, 0),
-        d: g(FcParamIds.rollD, 0.04),
+        p: g(FcParamIds.rollP),
+        i: g(FcParamIds.rollI),
+        d: g(FcParamIds.rollD),
       ),
       innerPitch: _Pid(
-        p: g(FcParamIds.pitchP, 1.2),
-        i: g(FcParamIds.pitchI, 0),
-        d: g(FcParamIds.pitchD, 0.04),
+        p: g(FcParamIds.pitchP),
+        i: g(FcParamIds.pitchI),
+        d: g(FcParamIds.pitchD),
       ),
       innerYaw: _Pid(
-        p: g(FcParamIds.yawP, 0.5),
-        i: g(FcParamIds.yawI, 0),
-        d: g(FcParamIds.yawD, 0.02),
+        p: g(FcParamIds.yawP),
+        i: g(FcParamIds.yawI),
+        d: g(FcParamIds.yawD),
       ),
       altHold: _Pid(
-        p: g(FcParamIds.altP, 100),
-        i: g(FcParamIds.altI, 10),
-        d: g(FcParamIds.altMax, 200),
+        p: g(FcParamIds.altP),
+        i: g(FcParamIds.altI),
+        d: g(FcParamIds.altMax),
       ),
     );
+  }
+
+  bool get _hasLiveFcParams {
+    const need = [
+      FcParamIds.outerRoll,
+      FcParamIds.outerPitch,
+      FcParamIds.outerYaw,
+      FcParamIds.rollP,
+      FcParamIds.pitchP,
+      FcParamIds.yawP,
+      FcParamIds.altP,
+    ];
+    return need.every(widget.session.params.containsKey);
   }
 
   Future<void> _write() async {
     if (_writing) return;
     setState(() => _writing = true);
+    final failed = <String>[];
+    var wrote = 0;
+
+    // Write only dirty params; each setParam verifies echo + RAM read-back.
+    Future<void> maybe(String id, double edited, double fc) async {
+      if ((edited - fc).abs() < 1e-6) return;
+      try {
+        await widget.session.setParam(id, edited);
+        wrote += 1;
+      } catch (e) {
+        failed.add('$id ($e)');
+      }
+    }
+
     try {
-      Future<void> w(String id, double v) async {
-        final stored = await widget.session.setParam(id, v);
-        widget.session.params[id] = stored;
-      }
-
-      // Write only dirty params (faster; clearer uplink failures).
-      Future<void> maybe(String id, double edited, double fc) async {
-        if ((edited - fc).abs() < 1e-6) return;
-        await w(id, edited);
-      }
-
       await maybe(FcParamIds.outerRoll, _edited.outerRollP, _fc.outerRollP);
       await maybe(FcParamIds.outerPitch, _edited.outerPitchP, _fc.outerPitchP);
       await maybe(FcParamIds.outerYaw, _edited.outerYawP, _fc.outerYawP);
@@ -162,17 +219,33 @@ class _TuningScreenState extends State<TuningScreen>
       await maybe(FcParamIds.altMax, _edited.altHold.d, _fc.altHold.d);
 
       if (!mounted) return;
-      setState(() {
-        _fc = _gainsFromParams(widget.session.params);
-        _edited = _fc.clone();
-        _writing = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Write verified — FC echoed values')),
-      );
+      // UI always follows verified FC RAM map (successes + unchanged).
+      setState(() => _writing = false);
+      _syncEditorsFromSession(forceEdited: true);
+      if (failed.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              wrote == 0
+                  ? 'Nothing to write — already matches FC RAM'
+                  : 'Write verified on FC ($wrote param${wrote == 1 ? '' : 's'})',
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Write partial: ${failed.length} failed. ${failed.join('; ')}',
+            ),
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _writing = false);
+      _syncEditorsFromSession(forceEdited: true);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Write failed: $e')),
       );
@@ -203,18 +276,50 @@ class _TuningScreenState extends State<TuningScreen>
     );
   }
 
-  void _revert() {
-    setState(() => _edited = _fc.clone());
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Reverted to FC values')),
-    );
+  /// Re-download current RAM params from the FC, then refresh the editors.
+  Future<void> _revert() async {
+    if (_writing) return;
+    setState(() => _writing = true);
+    try {
+      await widget.session.downloadParams();
+      if (!mounted) return;
+      setState(() => _writing = false);
+      _syncEditorsFromSession(forceEdited: true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Reverted — reloaded current FC RAM values'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _writing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Revert failed: $e')),
+      );
+    }
   }
 
-  void _reloadFromFc() {
-    setState(() {
-      _fc = _gainsFromParams(widget.session.params);
-      _edited = _fc.clone();
-    });
+  /// Pull live RAM from FC, then refresh sliders (same as Revert, quieter).
+  Future<void> _reloadFromFc() async {
+    if (_writing) return;
+    setState(() => _writing = true);
+    try {
+      await widget.session.downloadParams();
+      if (!mounted) return;
+      setState(() => _writing = false);
+      _syncEditorsFromSession(forceEdited: true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reloaded from FC RAM')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _writing = false);
+      // Fall back to whatever is already in the session map.
+      _syncEditorsFromSession(forceEdited: true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reload failed: $e')),
+      );
+    }
   }
 
   bool get _dirty =>
@@ -278,6 +383,16 @@ class _TuningScreenState extends State<TuningScreen>
             child: const Text(
               'Armed — Write disabled',
               style: TextStyle(color: AppColors.danger, fontSize: 11),
+            ),
+          ),
+        if (!_hasLiveFcParams)
+          Container(
+            width: double.infinity,
+            color: AppColors.cta.withValues(alpha: 0.12),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            child: const Text(
+              'No live FC params yet — tap Revert to download RAM (no catalog fill)',
+              style: TextStyle(color: AppColors.forest, fontSize: 11),
             ),
           ),
         Expanded(

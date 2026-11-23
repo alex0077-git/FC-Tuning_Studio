@@ -38,6 +38,8 @@ class _ShellScreenState extends State<ShellScreen> {
   StreamSubscription? _battSub;
   Timer? _linkWatch;
   bool _resetBusy = false;
+  /// Bumped after Reset re-downloads FC RAM so Tuning editors refresh.
+  int _paramsRevision = 0;
 
   bool _connected = false;
   bool _linkAlive = false;
@@ -109,6 +111,8 @@ class _ShellScreenState extends State<ShellScreen> {
       _armed = armed;
       _firmware = firmware;
       _pageIndex = 1;
+      // Force Tuning (kept alive in IndexedStack) to rebuild from session.params.
+      _paramsRevision++;
     });
     _listenLink();
     unawaited(_voice.init());
@@ -289,11 +293,13 @@ class _ShellScreenState extends State<ShellScreen> {
     if (!mounted) return;
     final t = line.startsWith('*') ? line.substring(1).trim() : line.trim();
     if (t == 'reset') {
-      setState(() => _resetBusy = false);
+      setState(() {
+        _resetBusy = false;
+        // Jump to Tuning so the live RAM refresh is visible immediately.
+        _pageIndex = 1;
+      });
       unawaited(_voice.sayReset());
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('FC resetting… wait for HEARTBEAT')),
-      );
+      unawaited(_reloadParamsAfterReset());
       return;
     }
     if (t == 'reset deny armed') {
@@ -304,6 +310,46 @@ class _ShellScreenState extends State<ShellScreen> {
     }
   }
 
+  /// After soft reboot: pull RAM as soon as HEARTBEAT is up (no link-drop wait).
+  Future<void> _reloadParamsAfterReset() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 12));
+    Object? lastErr;
+
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      if (_session.linkAlive) {
+        try {
+          await _session.downloadParams(
+            idle: const Duration(milliseconds: 60),
+            attempts: 12,
+          );
+          if (!mounted) return;
+          setState(() {
+            _paramsRevision++;
+            _pageIndex = 1;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Tuning = FC RAM after reset')),
+          );
+          return;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          lastErr == null
+              ? 'Reset: link did not return — Tuning → Revert'
+              : 'Reset: param reload failed ($lastErr)',
+        ),
+      ),
+    );
+  }
+
   Future<void> _confirmReset() async {
     if (!_connected || !_linkAlive || _armed || _resetBusy) return;
     final ok = await showDialog<bool>(
@@ -312,7 +358,7 @@ class _ShellScreenState extends State<ShellScreen> {
         title: const Text('Reboot FC?'),
         content: const Text(
           'Sends STATUSTEXT “reset”. Craft must be disarmed. '
-          'Link drops briefly; RAM params return to firmware defaults.',
+          'Link may drop briefly; Tuning snaps to live FC RAM as soon as it returns.',
         ),
         actions: [
           TextButton(
@@ -330,6 +376,8 @@ class _ShellScreenState extends State<ShellScreen> {
     setState(() => _resetBusy = true);
     try {
       await _session.sendReset();
+      // If FC never sends *reset, still reload when link returns.
+      unawaited(_fallbackReloadIfNoStarReset());
     } catch (e) {
       if (!mounted) return;
       setState(() => _resetBusy = false);
@@ -337,6 +385,13 @@ class _ShellScreenState extends State<ShellScreen> {
         SnackBar(content: Text('Reset send failed: $e')),
       );
     }
+  }
+
+  Future<void> _fallbackReloadIfNoStarReset() async {
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!mounted || !_resetBusy) return;
+    setState(() => _resetBusy = false);
+    await _reloadParamsAfterReset();
   }
 
   @override
@@ -364,6 +419,7 @@ class _ShellScreenState extends State<ShellScreen> {
           key: const ValueKey('tuning-screen'),
           session: _session,
           armed: _armed,
+          paramsRevision: _paramsRevision,
         ),
       ),
       _LockedPage(

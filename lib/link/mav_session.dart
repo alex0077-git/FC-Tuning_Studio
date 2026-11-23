@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../logs/live_log_assembler.dart';
 import '../logs/sd_tunnel_assembler.dart';
 import '../mavlink/mavlink_v2.dart';
@@ -23,6 +25,9 @@ class MavSession {
   final Map<String, double> params = {};
   final Map<int, String> idsByIndex = {};
   final Map<int, int> msgidCounts = {};
+
+  /// Bumped whenever [params] is filled/updated from the FC so Tuning can refresh.
+  final ValueNotifier<int> paramsEpoch = ValueNotifier<int>(0);
 
   Heartbeat? lastHeartbeat;
   Attitude? lastAttitude;
@@ -79,6 +84,22 @@ class MavSession {
       .where((p) => p != null)
       .cast<ParamValue>();
 
+  bool _paramsNotifyScheduled = false;
+
+  void _notifyParamsChanged() {
+    paramsEpoch.value = paramsEpoch.value + 1;
+  }
+
+  /// Coalesce many PARAM_VALUE frames in one turn into a single UI bump.
+  void _scheduleParamsNotify() {
+    if (_paramsNotifyScheduled) return;
+    _paramsNotifyScheduled = true;
+    scheduleMicrotask(() {
+      _paramsNotifyScheduled = false;
+      _notifyParamsChanged();
+    });
+  }
+
   Future<void> connect(ByteLink link) async {
     await disconnect();
     params.clear();
@@ -99,6 +120,7 @@ class MavSession {
     parser.crcFailures = 0;
     _liveLogAsm.reset();
     _sdAsm.reset();
+    _notifyParamsChanged();
 
     _link = link;
     await link.open();
@@ -137,12 +159,14 @@ class MavSession {
         expectedParamCount = pv.count;
         params[pv.paramId] = pv.value;
         idsByIndex[pv.index] = pv.paramId;
+        _scheduleParamsNotify();
       } else if (pv != null && expectedParamCount == null && pv.count >= 1 && pv.count <= 64) {
         // Accept count even if id decode is still settling.
         expectedParamCount = pv.count;
         if (pv.paramId.isNotEmpty) {
           params[pv.paramId] = pv.value;
           idsByIndex[pv.index] = pv.paramId;
+          _scheduleParamsNotify();
         }
       }
     } else if (m.msgid == msgStatustext) {
@@ -311,10 +335,21 @@ class MavSession {
     );
   }
 
+  /// Drop cached PARAM map so the next download cannot short-circuit on stale RAM.
+  void clearParamsCache() {
+    params.clear();
+    idsByIndex.clear();
+    expectedParamCount = null;
+    _notifyParamsChanged();
+  }
+
   Future<void> downloadParams({
     Duration idle = const Duration(milliseconds: 400),
     int attempts = 25,
   }) async {
+    // Always re-pull from FC — never reuse a "complete" cache after Reset/reboot.
+    clearParamsCache();
+
     // Learn mavlinkd peer from RX before PARAM uplink (reply-to-sender).
     final link = _link;
     if (link is G20UdpLink) {
@@ -353,7 +388,10 @@ class MavSession {
         for (var idx = 0; idx < expectedParamCount!; idx++) {
           if (!idsByIndex.containsKey(idx)) missing.add(idx);
         }
-        if (missing.isEmpty) return;
+        if (missing.isEmpty) {
+          _notifyParamsChanged();
+          return;
+        }
 
         await sendAsync(encoder.heartbeat());
         await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -364,6 +402,8 @@ class MavSession {
         }
         await Future<void>.delayed(idle);
       }
+      // Partial list still notify — UI should show whatever RAM we got.
+      _notifyParamsChanged();
     } finally {
       keepAlive.cancel();
     }
@@ -380,13 +420,19 @@ class MavSession {
       idsByIndex[i++] = id;
     }
     expectedParamCount = defaults.length;
+    _notifyParamsChanged();
   }
 
-  Future<double> setParam(String id, double value) async {
-    if (armed) {
-      throw StateError('Disarm to tune — FC refuses PARAM_SET while armed');
-    }
+  /// Max |echo − written| accepted as a successful verify.
+  static const paramVerifyEps = 1e-3;
 
+  Future<double> _awaitParamValue(
+    String id, {
+    required Future<void> Function(int attempt) poke,
+    required String timeoutLabel,
+    Duration timeout = const Duration(seconds: 5),
+    int maxAttempts = 10,
+  }) async {
     final beforeSeen = paramValueSeen;
     final completer = Completer<ParamValue>();
     late final StreamSubscription<ParamValue> sub;
@@ -397,9 +443,77 @@ class MavSession {
       if (!completer.isCompleted) completer.complete(p);
     });
 
-    Future<void> poke() async {
+    Future<void> doPoke() async {
       attempt += 1;
       try {
+        await poke(attempt);
+      } catch (_) {}
+    }
+
+    await doPoke();
+    retry = Timer.periodic(const Duration(milliseconds: 350), (_) {
+      if (completer.isCompleted) return;
+      if (attempt >= maxAttempts) return;
+      unawaited(doPoke());
+    });
+
+    try {
+      return (await completer.future.timeout(
+        timeout,
+        onTimeout: () {
+          final linkHint = _link is G20UdpLink
+              ? (_link as G20UdpLink).statusLine
+              : 'tx unknown';
+          throw TimeoutException(
+            '$timeoutLabel for $id '
+            '(msg22 Δ=${paramValueSeen - beforeSeen}, $linkHint). '
+            'FC→app OK; uplink peer may be wrong — close QGC.',
+          );
+        },
+      ))
+          .value;
+    } finally {
+      retry.cancel();
+      await sub.cancel();
+    }
+  }
+
+  /// PARAM_REQUEST_READ by id; returns the live RAM value from FC.
+  Future<double> readParam(String id) async {
+    final g20 = _link;
+    if (g20 is G20UdpLink) {
+      await g20.waitForPeer(timeout: const Duration(seconds: 2));
+    }
+
+    final value = await _awaitParamValue(
+      id,
+      timeoutLabel: 'No PARAM_VALUE read-back',
+      poke: (attempt) async {
+        await sendAsync(encoder.heartbeat());
+        await sendAsync(
+          encoder.paramRequestRead(paramId: id, paramIndex: -1),
+        );
+      },
+    );
+    params[id] = value;
+    return value;
+  }
+
+  /// PARAM_SET then verify echo matches, then read-back verify from FC RAM.
+  Future<double> setParam(String id, double value) async {
+    if (armed) {
+      throw StateError('Disarm to tune — FC refuses PARAM_SET while armed');
+    }
+
+    final g20 = _link;
+    if (g20 is G20UdpLink) {
+      await g20.waitForPeer(timeout: const Duration(seconds: 2));
+    }
+
+    final echoed = await _awaitParamValue(
+      id,
+      timeoutLabel: 'No PARAM_VALUE echo',
+      poke: (attempt) async {
         await sendAsync(encoder.heartbeat());
         // Alternate firmware Phase B layout and QGC/standard layout.
         if (attempt.isOdd) {
@@ -407,42 +521,26 @@ class MavSession {
         } else {
           await sendAsync(encoder.paramSetStandard(paramId: id, value: value));
         }
-      } catch (_) {}
-    }
+      },
+    );
 
-    // Ensure we know who to reply to before SET.
-    final g20 = _link;
-    if (g20 is G20UdpLink) {
-      await g20.waitForPeer(timeout: const Duration(seconds: 2));
-    }
-
-    await poke();
-    retry = Timer.periodic(const Duration(milliseconds: 350), (_) {
-      if (completer.isCompleted) return;
-      if (attempt >= 10) return;
-      unawaited(poke());
-    });
-
-    try {
-      final stored = await completer.future.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () {
-          final linkHint = _link is G20UdpLink
-              ? (_link as G20UdpLink).statusLine
-              : 'tx unknown';
-          throw TimeoutException(
-            'No PARAM_VALUE echo for $id '
-            '(msg22 Δ=${paramValueSeen - beforeSeen}, $linkHint). '
-            'FC→app OK; uplink peer may be wrong — close QGC.',
-          );
-        },
+    if ((echoed - value).abs() > paramVerifyEps) {
+      throw StateError(
+        'FC echo mismatch for $id: wrote $value, echo $echoed',
       );
-      params[id] = stored.value;
-      return stored.value;
-    } finally {
-      retry?.cancel();
-      await sub.cancel();
     }
+
+    // Second check: re-read RAM so the UI only trusts what is on the FC.
+    final readBack = await readParam(id);
+    if ((readBack - value).abs() > paramVerifyEps) {
+      throw StateError(
+        'FC RAM mismatch for $id: wrote $value, read-back $readBack',
+      );
+    }
+
+    params[id] = readBack;
+    _notifyParamsChanged();
+    return readBack;
   }
 
   Future<void> disconnect() async {
@@ -456,6 +554,7 @@ class MavSession {
 
   Future<void> dispose() async {
     await disconnect();
+    paramsEpoch.dispose();
     await _messages.close();
     await _liveLogLines.close();
     await _sdLogLines.close();

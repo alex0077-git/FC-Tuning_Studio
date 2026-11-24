@@ -22,6 +22,8 @@ class MavSession {
   final _sdLogLines = StreamController<String>.broadcast();
   /// Motor / cruise replies (`*base …`, `*motor …`). Not Live Log or SD.
   final _starStatus = StreamController<String>.broadcast();
+  /// Merged GPS from MAVLink 24 + 33 (not Live Log).
+  final _gps = StreamController<FcGpsState>.broadcast();
   final Map<String, double> params = {};
   final Map<int, String> idsByIndex = {};
   final Map<int, int> msgidCounts = {};
@@ -32,6 +34,7 @@ class MavSession {
   Heartbeat? lastHeartbeat;
   Attitude? lastAttitude;
   SysStatus? lastSysStatus;
+  FcGpsState? lastGps;
   String? lastLiveLogLine;
   int? expectedParamCount;
   int rxBytes = 0;
@@ -49,6 +52,7 @@ class MavSession {
   Stream<String> get liveLogLines => _liveLogLines.stream;
   Stream<String> get sdLogLines => _sdLogLines.stream;
   Stream<String> get starStatusLines => _starStatus.stream;
+  Stream<FcGpsState> get gpsStates => _gps.stream;
   bool get armed => lastHeartbeat?.armed ?? false;
   bool get isConnected => _link != null;
 
@@ -109,6 +113,7 @@ class MavSession {
     lastHeartbeat = null;
     lastAttitude = null;
     lastSysStatus = null;
+    lastGps = null;
     lastLiveLogLine = null;
     lastFcHeartbeatAt = null;
     lastSysStatusAt = null;
@@ -152,6 +157,12 @@ class MavSession {
       }
     } else if (m.msgid == msgAttitude) {
       lastAttitude = decodeAttitude(m.payload);
+    } else if (m.msgid == msgGpsRawInt) {
+      final raw = decodeGpsRawInt(m.payload);
+      if (raw != null) _mergeGpsRaw(raw);
+    } else if (m.msgid == msgGlobalPositionInt) {
+      final g = decodeGlobalPositionInt(m.payload);
+      if (g != null) _mergeGpsGlobal(g);
     } else if (m.msgid == msgParamValue) {
       paramValueSeen += 1;
       final pv = decodeParamValue(m.payload);
@@ -197,6 +208,32 @@ class MavSession {
       }
     }
     _messages.add(m);
+  }
+
+  void _mergeGpsRaw(GpsRawInt raw) {
+    final prev = lastGps;
+    // fix_type + sats from RAW; lat/lon if valid (skip 0,0).
+    final next = FcGpsState(
+      latDeg: raw.hasValidLatLon ? raw.latDeg : prev?.latDeg,
+      lonDeg: raw.hasValidLatLon ? raw.lonDeg : prev?.lonDeg,
+      fixType: raw.fixType,
+      satellitesVisible: raw.satellitesVisible,
+    );
+    lastGps = next;
+    if (!_gps.isClosed) _gps.add(next);
+  }
+
+  void _mergeGpsGlobal(GlobalPositionInt g) {
+    final prev = lastGps;
+    // Map position from GLOBAL; keep fix/sats from RAW. Skip 0,0.
+    final next = FcGpsState(
+      latDeg: g.hasValidLatLon ? g.latDeg : prev?.latDeg,
+      lonDeg: g.hasValidLatLon ? g.lonDeg : prev?.lonDeg,
+      fixType: prev?.fixType,
+      satellitesVisible: prev?.satellitesVisible,
+    );
+    lastGps = next;
+    if (!_gps.isClosed) _gps.add(next);
   }
 
   /// Clear SD `#`/`$` reassembly before a new `log list` / `dump` / `wipe`.
@@ -559,5 +596,6 @@ class MavSession {
     await _liveLogLines.close();
     await _sdLogLines.close();
     await _starStatus.close();
+    await _gps.close();
   }
 }

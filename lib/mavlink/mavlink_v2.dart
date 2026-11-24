@@ -12,7 +12,9 @@ const int msgParamRequestRead = 20;
 const int msgParamRequestList = 21;
 const int msgParamValue = 22;
 const int msgParamSet = 23;
+const int msgGpsRawInt = 24;
 const int msgAttitude = 30;
+const int msgGlobalPositionInt = 33;
 const int msgStatustext = 253;
 
 const int crcHeartbeat = 50;
@@ -21,7 +23,9 @@ const int crcParamRequestRead = 214;
 const int crcParamRequestList = 159;
 const int crcParamValue = 220;
 const int crcParamSet = 168;
+const int crcGpsRawInt = 24;
 const int crcAttitude = 39;
+const int crcGlobalPositionInt = 104;
 const int crcStatustext = 83;
 
 const int mavModeFlagArmed = 128;
@@ -35,7 +39,9 @@ int crcExtraFor(int msgid) => switch (msgid) {
       msgParamRequestList => crcParamRequestList,
       msgParamValue => crcParamValue,
       msgParamSet => crcParamSet,
+      msgGpsRawInt => crcGpsRawInt,
       msgAttitude => crcAttitude,
+      msgGlobalPositionInt => crcGlobalPositionInt,
       msgStatustext => crcStatustext,
       _ => 0,
     };
@@ -200,6 +206,91 @@ Attitude? decodeAttitude(Uint8List p) {
     pitchspeed: _f32(p, 20),
     yawspeed: _f32(p, 24),
   );
+}
+
+/// MAVLink GPS_RAW_INT (24) — fix quality + sats (+ lat/lon ×1e7).
+class GpsRawInt {
+  GpsRawInt({
+    required this.fixType,
+    required this.latE7,
+    required this.lonE7,
+    required this.satellitesVisible,
+  });
+
+  final int fixType;
+  final int latE7;
+  final int lonE7;
+  final int satellitesVisible;
+
+  bool get hasValidLatLon => !(latE7 == 0 && lonE7 == 0);
+  double get latDeg => latE7 / 1e7;
+  double get lonDeg => lonE7 / 1e7;
+  bool get fixOk => fixType >= 2;
+}
+
+GpsRawInt? decodeGpsRawInt(Uint8List p) {
+  // time_usec(8) + fix(1) + lat(4) + lon(4) + alt(4) + eph(2) + epv(2) + vel(2) + cog(2) + sats(1)
+  if (p.length < 30) return null;
+  return GpsRawInt(
+    fixType: p[8],
+    latE7: _i32(p, 9),
+    lonE7: _i32(p, 13),
+    satellitesVisible: p[29],
+  );
+}
+
+/// MAVLink GLOBAL_POSITION_INT (33) — fused lat/lon ×1e7 for the map.
+class GlobalPositionInt {
+  GlobalPositionInt({
+    required this.timeBootMs,
+    required this.latE7,
+    required this.lonE7,
+    required this.altMm,
+    required this.relativeAltMm,
+  });
+
+  final int timeBootMs;
+  final int latE7;
+  final int lonE7;
+  final int altMm;
+  final int relativeAltMm;
+
+  bool get hasValidLatLon => !(latE7 == 0 && lonE7 == 0);
+  double get latDeg => latE7 / 1e7;
+  double get lonDeg => lonE7 / 1e7;
+}
+
+GlobalPositionInt? decodeGlobalPositionInt(Uint8List p) {
+  if (p.length < 28) return null;
+  return GlobalPositionInt(
+    timeBootMs: _u32(p, 0),
+    latE7: _i32(p, 4),
+    lonE7: _i32(p, 8),
+    altMm: _i32(p, 12),
+    relativeAltMm: _i32(p, 16),
+  );
+}
+
+/// Merged GPS view for UI — prefer GLOBAL_POSITION_INT for map, GPS_RAW_INT for fix/sats.
+class FcGpsState {
+  const FcGpsState({
+    this.latDeg,
+    this.lonDeg,
+    this.fixType,
+    this.satellitesVisible,
+  });
+
+  final double? latDeg;
+  final double? lonDeg;
+  final int? fixType;
+  final int? satellitesVisible;
+
+  bool get hasValidLatLon =>
+      latDeg != null &&
+      lonDeg != null &&
+      !(latDeg == 0.0 && lonDeg == 0.0);
+
+  bool get fixOk => fixType != null && fixType! >= 2;
 }
 
 /// MAVLink SYS_STATUS (1) — battery fields (bridge §18 / Current Firmware).
@@ -522,6 +613,8 @@ class MavlinkV2Encoder {
 int _u16(Uint8List p, int o) => p[o] | (p[o + 1] << 8);
 int _u32(Uint8List p, int o) =>
     p[o] | (p[o + 1] << 8) | (p[o + 2] << 16) | (p[o + 3] << 24);
+int _i32(Uint8List p, int o) =>
+    ByteData.sublistView(p, o, o + 4).getInt32(0, Endian.little);
 int _i16(Uint8List p, int o) {
   final u = _u16(p, o);
   return u > 32767 ? u - 65536 : u;

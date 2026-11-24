@@ -12,6 +12,7 @@ import '../voice/fc_voice.dart';
 import 'althold_3d_screen.dart';
 import 'battery_screen.dart';
 import 'connect_screen.dart';
+import 'gps_screen.dart';
 import 'logs_screen.dart';
 import 'motor_screen.dart';
 import 'sim_connect_screen.dart';
@@ -26,7 +27,7 @@ class ShellScreen extends StatefulWidget {
 }
 
 class _ShellScreenState extends State<ShellScreen> {
-  /// 0 Connect · 1 Tuning · 2 Logs · 3 3D · 4 Motor · 5 Battery · 6 Simulation · 7 AltHold 3D
+  /// 0 Connect · 1 Tuning · 2 Logs · 3 3D · 4 Motor · 5 Battery · 6 Simulation · 7 AltHold 3D · 8 GPS
   int _pageIndex = 0;
   final MavSession _session = MavSession();
   final FcVoice _voice = FcVoice();
@@ -36,6 +37,7 @@ class _ShellScreenState extends State<ShellScreen> {
   StreamSubscription? _starSub;
   StreamSubscription? _liveSub;
   StreamSubscription? _battSub;
+  StreamSubscription? _gpsSub;
   Timer? _linkWatch;
   bool _resetBusy = false;
   /// Bumped after Reset re-downloads FC RAM so Tuning editors refresh.
@@ -45,8 +47,9 @@ class _ShellScreenState extends State<ShellScreen> {
   bool _linkAlive = false;
   bool _armed = false;
   bool _altHoldActive = false;
+  bool _magOn = false;
   SysStatus? _battery;
-  String _firmware = '—';
+  FcGpsState? _gps;
   BatteryProfile _battProfile = BatteryProfile.defaults;
 
   bool _warn1Acked = false;
@@ -72,6 +75,7 @@ class _ShellScreenState extends State<ShellScreen> {
     _starSub?.cancel();
     _liveSub?.cancel();
     _battSub?.cancel();
+    _gpsSub?.cancel();
     _linkWatch?.cancel();
     unawaited(_voice.dispose());
     _session.dispose();
@@ -109,7 +113,7 @@ class _ShellScreenState extends State<ShellScreen> {
       _connected = true;
       _linkAlive = true;
       _armed = armed;
-      _firmware = firmware;
+      _gps = _session.lastGps;
       _pageIndex = 1;
       // Force Tuning (kept alive in IndexedStack) to rebuild from session.params.
       _paramsRevision++;
@@ -128,14 +132,16 @@ class _ShellScreenState extends State<ShellScreen> {
     _starSub?.cancel();
     _liveSub?.cancel();
     _battSub?.cancel();
+    _gpsSub?.cancel();
     _linkWatch?.cancel();
     setState(() {
       _connected = false;
       _linkAlive = false;
       _armed = false;
       _altHoldActive = false;
+      _magOn = false;
       _battery = null;
-      _firmware = '—';
+      _gps = null;
       _resetBusy = false;
       _pageIndex = returnPage;
       _clearBatteryWarns();
@@ -239,8 +245,10 @@ class _ShellScreenState extends State<ShellScreen> {
     _starSub?.cancel();
     _liveSub?.cancel();
     _battSub?.cancel();
+    _gpsSub?.cancel();
     _linkWatch?.cancel();
     _battery = _session.lastSysStatus;
+    _gps = _session.lastGps;
     _hbSub = _session.heartbeats.listen((hb) {
       if (!mounted) return;
       final wasArmed = _armed;
@@ -254,20 +262,31 @@ class _ShellScreenState extends State<ShellScreen> {
         unawaited(_voice.sayDisarmed());
       }
     });
+    _gpsSub = _session.gpsStates.listen((g) {
+      if (!mounted) return;
+      setState(() => _gps = g);
+    });
     _starSub = _session.starStatusLines.listen(_onStarStatus);
     _liveSub = _session.liveLogLines.listen((line) {
       if (!mounted) return;
-      final act = LiveLogFields.parse(line).ahAct;
-      final on = act != null && act != 0;
-      if (on != _altHoldActive) {
-        final becameOn = on && !_altHoldActive;
-        final becameOff = !on && _altHoldActive;
-        setState(() => _altHoldActive = on);
+      final f = LiveLogFields.parse(line);
+
+      final act = f.ahAct;
+      final ahOn = act != null && act != 0;
+      if (ahOn != _altHoldActive) {
+        final becameOn = ahOn && !_altHoldActive;
+        final becameOff = !ahOn && _altHoldActive;
+        setState(() => _altHoldActive = ahOn);
         if (becameOn) {
           unawaited(_voice.sayAltHoldOn());
         } else if (becameOff) {
           unawaited(_voice.sayAltHoldOff());
         }
+      }
+
+      // Mag light only when attitude fused mag this sample (`h1`).
+      if (f.magFused != null && f.magFused != _magOn) {
+        setState(() => _magOn = f.magFused!);
       }
     });
     _battSub = _session.sysStatuses.listen(_onBattery);
@@ -282,7 +301,9 @@ class _ShellScreenState extends State<ShellScreen> {
           _linkAlive = alive;
           if (!alive) {
             _altHoldActive = false;
+            _magOn = false;
             _battery = null;
+            _gps = null;
           }
         });
       }
@@ -479,6 +500,15 @@ class _ShellScreenState extends State<ShellScreen> {
           session: _connected ? _session : null,
         ),
       ),
+      _LockedPage(
+        key: const ValueKey('gps'),
+        locked: !_connected,
+        onConnectTap: _openConnect,
+        child: GpsScreen(
+          key: const ValueKey('gps-screen'),
+          session: _connected ? _session : null,
+        ),
+      ),
     ];
 
     return PopScope(
@@ -504,9 +534,10 @@ class _ShellScreenState extends State<ShellScreen> {
                     linkAlive: _linkAlive,
                     armed: _armed,
                     altHoldActive: _altHoldActive,
+                    magOn: _magOn,
                     battery: _battery,
                     profile: _battProfile,
-                    firmware: _firmware,
+                    gps: _gps,
                     compact: g20.compactChrome,
                     resetBusy: _resetBusy,
                     onMenuTap: _openDrawer,
@@ -672,6 +703,12 @@ class _NavDrawer extends StatelessWidget {
                     onTap: () => onSelect(7),
                   ),
                   _item(
+                    icon: Icons.map,
+                    label: 'GPS',
+                    selected: selectedIndex == 8,
+                    onTap: () => onSelect(8),
+                  ),
+                  _item(
                     icon: Icons.settings_input_component,
                     label: 'Motor',
                     selected: selectedIndex == 4,
@@ -729,9 +766,10 @@ class _StatusBar extends StatelessWidget {
     required this.linkAlive,
     required this.armed,
     required this.altHoldActive,
+    required this.magOn,
     required this.battery,
     required this.profile,
-    required this.firmware,
+    required this.gps,
     required this.compact,
     required this.resetBusy,
     required this.onMenuTap,
@@ -743,9 +781,10 @@ class _StatusBar extends StatelessWidget {
   final bool linkAlive;
   final bool armed;
   final bool altHoldActive;
+  final bool magOn;
   final SysStatus? battery;
   final BatteryProfile profile;
-  final String firmware;
+  final FcGpsState? gps;
   final bool compact;
   final bool resetBusy;
   final VoidCallback onMenuTap;
@@ -869,7 +908,12 @@ class _StatusBar extends StatelessWidget {
                                   color: const Color(0xFFFFD54F),
                                 ),
                               ),
-                            TextSpan(text: '  ·  $firmware'),
+                            TextSpan(
+                              text: connected && linkAlive
+                                  ? '  ·  Fix ${gps?.fixType ?? '—'}'
+                                      '  ·  Sats ${gps?.satellitesVisible ?? '—'}'
+                                  : '  ·  Fix —  ·  Sats —',
+                            ),
                           ],
                         ),
                         overflow: TextOverflow.ellipsis,
@@ -920,6 +964,30 @@ class _StatusBar extends StatelessWidget {
                       ),
               ),
             ),
+            // Small green mag light — rightmost, after Reset (`h1`).
+            if (magOn)
+              Padding(
+                padding: const EdgeInsets.only(left: 4, right: 6),
+                child: Tooltip(
+                  message: 'Magnetometer on',
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF66BB6A),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF66BB6A).withValues(alpha: 0.55),
+                          blurRadius: 5,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            else
+              const SizedBox(width: 14),
           ],
         ),
       ),

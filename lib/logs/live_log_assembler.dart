@@ -54,6 +54,10 @@ class LiveLogFields {
     this.m4,
     this.gpsFix,
     this.sats,
+    this.latDeg,
+    this.lonDeg,
+    this.magOn,
+    this.magFused,
   });
 
   final String? mode;
@@ -82,6 +86,18 @@ class LiveLogFields {
   final int? gpsFix;
   final int? sats;
 
+  /// Decimal degrees from Live Log `lat=` / `lon=` (null until FC sends them).
+  final double? latDeg;
+  final double? lonDeg;
+
+  /// Mag mode on TX: true when line has `h0`/`h1`, false when `lsm`.
+  final bool? magOn;
+
+  /// True only when attitude fused mag this sample (`h1`).
+  final bool? magFused;
+
+  bool get hasLatLon => latDeg != null && lonDeg != null;
+
   static final _mode = RegExp(r'\[(DMA|poll)\]');
   static final _seq = RegExp(r'\bs(\d+)\b');
   static final _arm = RegExp(r'\b(ARM|DIS)\b');
@@ -97,7 +113,6 @@ class LiveLogFields {
   static final _z = RegExp(
     r'Z\s+(-?\d+(?:\.\d+)?)\s+raw\s+(-?\d+(?:\.\d+)?)',
   );
-  // dU / i are optional so short mock AH lines still parse act + tgt.
   static final _ah = RegExp(
     r'AH\s+en=(\d+)\s+act=(\d+)\s+tgt\s+(-?\d+(?:\.\d+)?)\s+err\s+(-?\d+(?:\.\d+)?)'
     r'(?:\s+dU\s+(-?\d+(?:\.\d+)?)\s+i\s+(-?\d+(?:\.\d+)?))?',
@@ -105,7 +120,13 @@ class LiveLogFields {
   static final _motors = RegExp(
     r'M\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+us',
   );
-  static final _gps = RegExp(r'GPS\s+(\d+)\s+sats=(\d+)');
+  // GPS 3 sats=12   optional: lat=… lon=…
+  static final _gps = RegExp(
+    r'GPS\s+(\d+)\s+sats=(\d+)'
+    r'(?:\s+lat=(-?\d+(?:\.\d+)?)\s+lon=(-?\d+(?:\.\d+)?))?',
+  );
+  static final _magF = RegExp(r'\bh([01])\b');
+  static final _lsmOnly = RegExp(r'\blsm\b');
 
   static double? _d(String? s) => s == null ? null : double.tryParse(s);
   static int? _i(String? s) => s == null ? null : int.tryParse(s);
@@ -121,6 +142,19 @@ class LiveLogFields {
     final ah = _ah.firstMatch(line);
     final m = _motors.firstMatch(line);
     final gps = _gps.firstMatch(line);
+    final magF = _magF.firstMatch(line);
+    final lsmOnly = _lsmOnly.hasMatch(line);
+
+    bool? magOn;
+    bool? magFused;
+    if (magF != null) {
+      magOn = true;
+      magFused = magF.group(1) == '1';
+    } else if (lsmOnly) {
+      magOn = false;
+      magFused = false;
+    }
+
     return LiveLogFields(
       mode: mode,
       seq: seq,
@@ -147,6 +181,10 @@ class LiveLogFields {
       m4: _i(m?.group(4)),
       gpsFix: _i(gps?.group(1)),
       sats: _i(gps?.group(2)),
+      latDeg: _d(gps?.group(3)),
+      lonDeg: _d(gps?.group(4)),
+      magOn: magOn,
+      magFused: magFused,
     );
   }
 }

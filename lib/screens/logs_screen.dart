@@ -41,6 +41,7 @@ class _LogsScreenState extends State<LogsScreen> {
   StreamSubscription<String>? _liveSub;
   StreamSubscription<Heartbeat>? _hbSub;
   StreamSubscription<Attitude>? _attSub;
+  StreamSubscription<FcGpsState>? _gpsSub;
   final _scrollController = ScrollController();
   final _feedController = ScrollController();
   final _liveStore = FlightLogStore();
@@ -52,6 +53,7 @@ class _LogsScreenState extends State<LogsScreen> {
   bool _paused = false;
   bool _showGraphs = true;
   LiveLogFields? _fields;
+  FcGpsState? _gps;
 
   final List<String> _lines = <String>[];
   static const int _maxLines = 300;
@@ -131,14 +133,23 @@ class _LogsScreenState extends State<LogsScreen> {
     _liveSub?.cancel();
     _hbSub?.cancel();
     _attSub?.cancel();
+    _gpsSub?.cancel();
     _liveSub = null;
     _hbSub = null;
     _attSub = null;
+    _gpsSub = null;
     _live = session != null;
     if (session == null) {
+      _gps = null;
       if (mounted) setState(() {});
       return;
     }
+
+    _gps = session.lastGps;
+    _gpsSub = session.gpsStates.listen((g) {
+      if (!mounted) return;
+      setState(() => _gps = g);
+    });
 
     _hbSub = session.heartbeats.listen((hb) {
       _armed = hb.armed;
@@ -407,6 +418,7 @@ class _LogsScreenState extends State<LogsScreen> {
     _liveSub?.cancel();
     _hbSub?.cancel();
     _attSub?.cancel();
+    _gpsSub?.cancel();
     _scrollController.dispose();
     _feedController.dispose();
     super.dispose();
@@ -479,7 +491,22 @@ class _LogsScreenState extends State<LogsScreen> {
             ),
             _mini(
               'GPS',
-              f == null ? '—' : '${f.gpsFix ?? 0} sats=${f.sats ?? 0}',
+              _gps == null
+                  ? '—'
+                  : 'fix=${_gps!.fixType ?? 0} sats=${_gps!.satellitesVisible ?? 0}'
+                      '${_gps!.fixOk ? ' OK' : ''}',
+            ),
+            _mini(
+              'Lat',
+              _gps?.hasValidLatLon == true
+                  ? _gps!.latDeg!.toStringAsFixed(6)
+                  : '—',
+            ),
+            _mini(
+              'Lon',
+              _gps?.hasValidLatLon == true
+                  ? _gps!.lonDeg!.toStringAsFixed(6)
+                  : '—',
             ),
             _mini('Lines', '$_liveCount'),
             _mini('Buf', '${_liveStore.bufferRows}'),

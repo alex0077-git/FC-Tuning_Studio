@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../layout/g20_metrics.dart';
 import '../link/mav_session.dart';
 import '../logs/live_log_assembler.dart';
+import '../mavlink/mavlink_v2.dart';
 import 'drone_3d_host.dart';
 
 /// Betaflight Setup → 3D: official quad_x model + instruments / GPS / system.
@@ -33,6 +34,7 @@ class _View3dScreenState extends State<View3dScreen> {
   StreamSubscription? _hbSub;
   StreamSubscription? _liveSub;
   StreamSubscription? _starSub;
+  StreamSubscription? _gpsSub;
 
   double _roll = 0;
   double _pitch = 0;
@@ -43,6 +45,7 @@ class _View3dScreenState extends State<View3dScreen> {
   bool _liveFromFc = false;
   bool _armed = false;
   LiveLogFields? _fields;
+  FcGpsState? _gps;
 
   /// Cruise / base throttle (µs). Stick or slider — last mover wins.
   int _cruiseUs = 1250;
@@ -83,12 +86,14 @@ class _View3dScreenState extends State<View3dScreen> {
     _hbSub?.cancel();
     _liveSub?.cancel();
     _starSub?.cancel();
+    _gpsSub?.cancel();
     _cruiseSendTimer?.cancel();
     _linkWatch?.cancel();
     _attSub = null;
     _hbSub = null;
     _liveSub = null;
     _starSub = null;
+    _gpsSub = null;
     _liveFromFc = session != null;
 
     if (session == null) {
@@ -102,6 +107,7 @@ class _View3dScreenState extends State<View3dScreen> {
           _gz = 0;
           _armed = false;
           _fields = null;
+          _gps = null;
           _cruiseUs = 1250;
           _altHoldOwns = false;
           _linkAlive = false;
@@ -114,6 +120,11 @@ class _View3dScreenState extends State<View3dScreen> {
 
     _armed = session.armed;
     _linkAlive = session.linkAlive;
+    _gps = session.lastGps;
+    _gpsSub = session.gpsStates.listen((g) {
+      if (!mounted) return;
+      setState(() => _gps = g);
+    });
     _linkWatch = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (!mounted) return;
       final alive = session.linkAlive;
@@ -249,6 +260,7 @@ class _View3dScreenState extends State<View3dScreen> {
     _hbSub?.cancel();
     _liveSub?.cancel();
     _starSub?.cancel();
+    _gpsSub?.cancel();
     super.dispose();
   }
 
@@ -299,6 +311,7 @@ class _View3dScreenState extends State<View3dScreen> {
       gz: _gz,
       armed: _armed,
       fields: _fields,
+      gps: _gps,
       heightLabel: heightLabel,
     );
 
@@ -486,6 +499,7 @@ class _BfSidebar extends StatelessWidget {
     required this.gz,
     required this.armed,
     required this.fields,
+    required this.gps,
     required this.heightLabel,
   });
 
@@ -497,13 +511,14 @@ class _BfSidebar extends StatelessWidget {
   final double gz;
   final bool armed;
   final LiveLogFields? fields;
+  final FcGpsState? gps;
   final String heightLabel;
 
   @override
   Widget build(BuildContext context) {
-    // Only show values we actually receive (Live Log / HEARTBEAT). Else "—".
-    final fix = fields?.gpsFix;
-    final sats = fields?.sats;
+    // GPS from MAVLink GPS_RAW_INT / GLOBAL_POSITION_INT. Else "—".
+    final fix = gps?.fixType;
+    final sats = gps?.satellitesVisible;
     final has3d = fix != null && fix >= 3;
     final fixLabel = fix == null ? '—' : (has3d ? 'True' : 'False');
     final fixColor = fix == null
@@ -554,7 +569,18 @@ class _BfSidebar extends StatelessWidget {
                 valueColor: fixColor,
               ),
               _row('Number of Satellites', sats?.toString() ?? '—'),
-              // Lat/Lon not in Phase B Live Log — omit (no fake zeros).
+              _row(
+                'Latitude',
+                gps?.hasValidLatLon == true
+                    ? gps!.latDeg!.toStringAsFixed(6)
+                    : '—',
+              ),
+              _row(
+                'Longitude',
+                gps?.hasValidLatLon == true
+                    ? gps!.lonDeg!.toStringAsFixed(6)
+                    : '—',
+              ),
             ],
           ),
         ),
